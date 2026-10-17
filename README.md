@@ -45,7 +45,7 @@ Permissions: repository **Administration: Read and write**, **Actions: Read**, *
 organization **Self-hosted runners: Read and write**. Subscribe to **Workflow job**. Install it on the
 org and on the personal repositories you serve (selected repositories only, since Administration is
 broad). Under the org: Settings, Actions, Runner groups: use a dedicated group limited to selected
-repositories, and turn on "Allow public repositories" there only if public repositories use it.
+repositories, and leave "Allow public repositories" off: the fleet serves private repositories only.
 
 ## Configuration (controller variables)
 
