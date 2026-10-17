@@ -14,6 +14,12 @@ set -euo pipefail
 start() {
   local port="${1:-}"
   local dir="${RUNNER_TEMP:-/tmp}/ci-redis"
+  # a server from an earlier start in this job is still running: refuse rather than wipe its
+  # directory (and, on the same port, mistake its PONG for the new server's)
+  if [[ -f "${dir}/redis.pid" ]] && kill -0 "$(cat "${dir}/redis.pid")" 2>/dev/null; then
+    echo "ci-redis: a server is already running (pid $(cat "${dir}/redis.pid")); run ci-redis stop first" >&2
+    return 1
+  fi
   rm -rf "${dir}" && mkdir -p "${dir}"
   if [[ -z "${port}" ]]; then
     port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
@@ -42,9 +48,16 @@ stop() {
     echo "CI_REDIS_PORT is not set; nothing to stop"
     return 0
   fi
-  if redis-cli -h 127.0.0.1 -p "${port}" SHUTDOWN NOSAVE >/dev/null 2>&1 || ! redis-cli -h 127.0.0.1 -p "${port}" PING >/dev/null 2>&1; then
-    echo "stopped"
-  fi
+  redis-cli -h 127.0.0.1 -p "${port}" SHUTDOWN NOSAVE >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do
+    if ! redis-cli -h 127.0.0.1 -p "${port}" PING >/dev/null 2>&1; then
+      echo "stopped"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "ci-redis: the server on port ${port} still answers after SHUTDOWN" >&2
+  return 1
 }
 
 case "${1:-}" in

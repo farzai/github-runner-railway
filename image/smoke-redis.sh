@@ -8,6 +8,10 @@ export RUNNER_TEMP GITHUB_ENV
 ci-redis start >/dev/null
 # shellcheck disable=SC1090 # the env file ci-redis wrote
 source <(sed 's/^/export /' "${GITHUB_ENV}")
+if ci-redis start >/dev/null 2>&1; then
+  echo "a second start while the first server runs must be refused" >&2
+  exit 1
+fi
 redis-cli -u "${CI_REDIS_URL}" SET smoke ok >/dev/null
 got="$(redis-cli -u "${CI_REDIS_URL}" GET smoke)"
 if [[ "${got}" != ok ]]; then
