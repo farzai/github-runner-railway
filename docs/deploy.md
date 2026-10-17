@@ -101,7 +101,7 @@ A push to `main` rebuilds the runner images only when `image/` changed, and the 
 when the Go code or its Dockerfile changed, so not every commit has every sha tag. The newest runner
 image is the sha of the last commit that touched `image/` (`git log -1 --format=%H -- image/`), and
 the newest controller image the last commit that touched `cmd/`, `internal/`, `go.mod` or
-`Dockerfile`. Releases (`vX.Y.Z` tags) always publish all three; prefer those.
+`Dockerfile`. Releases (`vX.Y.Z` tags) always publish all three; prefer those to sha tags.
 
 ## Rate limits and costs
 
