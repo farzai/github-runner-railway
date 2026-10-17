@@ -32,6 +32,18 @@ hostile: a dependency, a compromised account or a fork pull request can run code
 * Set a Railway usage limit on the runner project, so a runaway queue cannot run up a bill.
 * Pin the images to a version or digest.
 
+## The sudo variant
+
+The `sudo-` image lets a job become root inside its own container. Other jobs' containers, the
+controller and the host stay out of reach only as far as Railway's container isolation holds, and
+root makes an escape attempt easier. A job can rewrite anything in its own container, and if the
+platform grants it network capabilities such as CAP_NET_RAW it can send raw packets on the shared
+private network. A compromised dependency in a sudo-pool job gets root in that container (which holds
+no deploy secrets, only its own JIT config). If your other pools are more sensitive, run the sudo pool
+in a separate Railway environment or project. Serve only private repositories with it, give it its
+own label and service prefix, and keep the default images (sudo-free) wherever a workflow can do
+without it.
+
 ## Two pools in one runner project
 
 Two controllers (for example the plain and the Postgres image) can share the runner project: each lists

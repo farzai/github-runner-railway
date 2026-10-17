@@ -155,6 +155,8 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck; no `sudo`, no Docker |
 | `ghcr.io/farzai/github-runner-railway:pg-<version>` | the above plus PostgreSQL 18, Playwright's Chromium/WebKit system libraries and browsers (see `image/Dockerfile` for the pinned versions), and `ci-postgres` |
 
+| `ghcr.io/farzai/github-runner-railway:sudo-<version>` | the base image plus passwordless `sudo` for the runner user (opt-in, see below) |
+
 To serve both, run a **second controller** with `RUNNER_LABEL=railway-pg`, `RUNNER_SERVICE_PREFIX=rp-`
 and the `pg-` image, in the same runner project. Each controller lists and removes only its own
 services and only takes jobs that ask for its label. A GitHub App has one webhook URL, so the second
@@ -173,8 +175,26 @@ steps:
 off, masks the password, and writes `CI_POSTGRES_URL`, `CI_POSTGRES_PORT` and `CI_POSTGRES_DATA` to
 `$GITHUB_ENV`. The server ends with the container.
 
-You can also build your own image from `image/Dockerfile` (keep the `entrypoint.sh` contract: read
-`ACTIONS_RUNNER_INPUT_JITCONFIG`, run one job, exit).
+### Your own image
+
+Build a derived image `FROM ghcr.io/farzai/github-runner-railway:<version>` and add what your jobs
+need at build time, so they need no sudo. [`examples/derived/Dockerfile`](examples/derived/Dockerfile)
+pins its base by digest and adds a Postgres client of a chosen major, libcurl headers, a prebuilt shared library registered with
+`ldconfig`, a CLI pinned by checksum, Node 22 with pnpm and bun, and Playwright browsers with their
+system libraries; CI builds it on every change. Switch to `root` for the installs and end with
+`USER runner` and `WORKDIR /home/runner`; keep the base's entrypoint (it reads
+`ACTIONS_RUNNER_INPUT_JITCONFIG`, runs one job and exits). Push it to your registry and set
+`RUNNER_IMAGE` to it.
+
+### The sudo variant (opt-in)
+
+For workflows you cannot change yet (`sudo apt-get install`, `playwright install --with-deps`,
+`ldconfig` in a step), the `sudo-<version>` image gives the runner user passwordless sudo. Each job
+is its own container, so root stays inside that job's container and is gone when it ends, but the
+job can now change anything in it, and the container still shares the runner project's private
+network with concurrent jobs. Use it for private repositories only, in its own pool (a controller
+with its own label and `RUNNER_SERVICE_PREFIX`), and prefer a derived image where you can. The
+default images stay sudo-free.
 
 ## Limits
 
@@ -183,7 +203,8 @@ You can also build your own image from `image/Dockerfile` (keep the `entrypoint.
   private repositories only, and require approval for fork pull request workflows (SECURITY.md).
 * **No Docker** (a Railway container has no daemon): no `docker build`, `docker://` actions, job
   `container:` or `services:`. Use the `pg` image or a hosted runner for those.
-* **No sudo**, so `sudo apt-get install` fails: use `setup-*` actions or bake tools into your image.
+* **No sudo** in the default images, so `sudo apt-get install` fails: use `setup-*` actions, a derived
+  image, or the opt-in sudo variant.
 * **CPU and processes:** each container is capped by your Railway plan (for example 24 vCPU, 24 GB and
   about 1,000 processes and threads). `nproc` shows the host's cores, not the quota; Node's
   `os.availableParallelism()` reads the quota. Pass explicit `-j`/worker counts to be safe.
@@ -205,7 +226,7 @@ up a bill.
 
 Releases are tagged `vX.Y.Z` (see [CHANGELOG.md](CHANGELOG.md)) and publish:
 
-* `ghcr.io/farzai/github-runner-railway:vX.Y.Z` and `:pg-vX.Y.Z`
+* `ghcr.io/farzai/github-runner-railway:vX.Y.Z`, `:pg-vX.Y.Z` and `:sudo-vX.Y.Z`
 * `ghcr.io/farzai/github-runner-railway-controller:vX.Y.Z`
 
 Commits on `main` also publish images under the commit sha, but only for the images they change (docs/deploy.md says which sha is current). There is no `latest`:
