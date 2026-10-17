@@ -92,7 +92,7 @@ type Plan struct {
 
 // Make is the plan for one cycle.
 //
-// A service is supply for its scope while it is starting (no runner yet, or one that is still
+// A service is supply for its scope while it is starting (not listed yet, inside RegisterLag, or one that is still
 // offline, inside the startup grace) or idle (registered, online, not busy). A busy runner is never touched, except past MaxAge,
 // and a service whose container ended or whose runner GitHub no longer lists is dead and goes. An idle
 // runner beyond the demand goes once it is older than IdleTTL, oldest first. New services
