@@ -65,10 +65,16 @@ type Controller struct {
 	alerted map[int64]string // job id -> scope key
 	status  Status
 
-	failures    int            // failed cycles in a row
-	lastSuccess time.Time      // the end of the last cycle with no error
-	scopeFails  map[string]int // scope key -> cycles in a row it could not be read
-	failAlerted bool           // the failing state has been alerted and not yet recovered
+	failures    int                  // failed cycles in a row
+	lastSuccess time.Time            // the end of the last cycle with no error
+	scopeFails  map[string]int       // scope key -> cycles in a row it could not be read
+	failAlerted bool                 // the failing state has been alerted and not yet recovered
+	lowWarn     map[string]time.Time // account -> the reset of the window already warned about
+}
+
+// RateLimiter is the optional part of GH that reports GitHub's rate limit per installation.
+type RateLimiter interface {
+	RateLimits() map[string]ghapp.RateLimit
 }
 
 // Status is the last cycle, for /healthz.
@@ -104,7 +110,7 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 		cfg.FailAlertAfter = 3
 	}
 	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{},
-		scopeFails: map[string]int{}}
+		scopeFails: map[string]int{}, lowWarn: map[string]time.Time{}}
 }
 
 // OnEvent is the webhook handler. Only a queued job can need a new runner; the rest wait for
@@ -247,6 +253,7 @@ func (c *Controller) Cycle(ctx context.Context) error {
 		created[cr.Scope]++
 	}
 	c.alertLate(now, jobsOf, services, runners, created)
+	c.warnLowLimits()
 	total := 0
 	for _, n := range queued {
 		total += n
@@ -388,9 +395,13 @@ func (c *Controller) HealthHandler() http.Handler {
 		if unreadable == nil {
 			unreadable = []string{}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued,
+		body := map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued,
 			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
-			"unreadable_scopes": unreadable})
+			"unreadable_scopes": unreadable}
+		if rl, ok := c.gh.(RateLimiter); ok {
+			body["github_rate_limits"] = rl.RateLimits()
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	})
 }
 
@@ -404,4 +415,20 @@ func wakeDelay(now, lastStart time.Time, debounce, minGap time.Duration) time.Du
 		return rest
 	}
 	return debounce
+}
+
+// warnLowLimits logs once per rate-limit window an installation with less than a tenth of its
+// GitHub requests left.
+func (c *Controller) warnLowLimits() {
+	rl, ok := c.gh.(RateLimiter)
+	if !ok {
+		return
+	}
+	for account, l := range rl.RateLimits() {
+		if l.Limit <= 0 || l.Remaining*10 >= l.Limit || c.lowWarn[account].Equal(l.Reset) {
+			continue
+		}
+		c.lowWarn[account] = l.Reset
+		c.cfg.Log.Warn("github rate limit low", "account", account, "remaining", l.Remaining, "limit", l.Limit, "reset", l.Reset)
+	}
 }

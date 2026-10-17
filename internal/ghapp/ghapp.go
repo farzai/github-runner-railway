@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,11 +45,26 @@ type Config struct {
 
 // Client talks to GitHub as the App.
 type Client struct {
-	cfg  Config
-	key  *rsa.PrivateKey
-	mu   sync.Mutex
-	toks map[string]token // by owner, or owner/repo for a repo scope
+	cfg    Config
+	key    *rsa.PrivateKey
+	mu     sync.Mutex
+	insts  map[string]int64     // scope key -> installation id
+	toks   map[int64]token      // installation id -> access token, shared by every scope of that installation
+	owners map[string]string    // access token -> the account it belongs to, for the rate limit
+	etags  map[string]cachedGet // URL -> the last answer, for conditional requests
+	limits map[string]RateLimit // account -> what GitHub last reported
 }
+
+// cachedGet is a GET answer kept for If-None-Match: a 304 does not count against the rate limit.
+type cachedGet struct {
+	etag string
+	body []byte
+	hdr  http.Header
+	used time.Time
+}
+
+// maxETags bounds the conditional-request cache; entries unused for an hour go first.
+const maxETags = 2000
 
 type token struct {
 	value   string
@@ -88,7 +104,8 @@ func New(cfg Config) (*Client, error) {
 	hc := *cfg.HTTP
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	cfg.HTTP = &hc
-	return &Client{cfg: cfg, key: key, toks: map[string]token{}}, nil
+	return &Client{cfg: cfg, key: key, insts: map[string]int64{}, toks: map[int64]token{}, owners: map[string]string{},
+		etags: map[string]cachedGet{}, limits: map[string]RateLimit{}}, nil
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
@@ -124,14 +141,45 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	var cached cachedGet
+	conditional := false
+	if method == http.MethodGet {
+		c.mu.Lock()
+		cached, conditional = c.etags[rawURL]
+		c.mu.Unlock()
+		if conditional {
+			req.Header.Set("If-None-Match", cached.etag)
+		}
+	}
 	res, err := c.cfg.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ghapp: %s %s: %w", method, req.URL.Path, err)
 	}
 	defer res.Body.Close()
+	c.noteLimit(bearer, res.Header)
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if res.StatusCode == http.StatusNotModified && conditional {
+		c.mu.Lock()
+		cached.used = time.Now()
+		c.etags[rawURL] = cached
+		c.mu.Unlock()
+		if into != nil && len(cached.body) > 0 {
+			if err := json.Unmarshal(cached.body, into); err != nil {
+				return cached.hdr, http.StatusOK, fmt.Errorf("ghapp: %s %s: undecodable answer", method, req.URL.Path)
+			}
+		}
+		return cached.hdr, http.StatusOK, nil // the cached Link header still names the next page
+	}
 	if res.StatusCode >= 300 {
 		return res.Header, res.StatusCode, fmt.Errorf("ghapp: %s %s: HTTP %d", method, req.URL.Path, res.StatusCode)
+	}
+	if method == http.MethodGet {
+		// Only a list answer with total_count is reused on a 304: total_count changes when the list
+		// grows, so page 1 cannot stay byte-identical while a page beyond it appears (a 304 replays
+		// the cached Link header, and a hidden page would make its runners look gone).
+		if etag := res.Header.Get("ETag"); etag != "" && hasTotalCount(raw) {
+			c.keep(rawURL, cachedGet{etag: etag, body: raw, hdr: res.Header.Clone(), used: time.Now()})
+		}
 	}
 	if into != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, into); err != nil {
@@ -141,42 +189,89 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 	return res.Header, res.StatusCode, nil
 }
 
-// installToken is an installation access token for the scope's owner, cached until a minute
-// before it expires.
-func (c *Client) installToken(ctx context.Context, s reconcile.Scope) (string, error) {
-	key := s.Owner
-	if s.Kind == "repo" {
-		key = s.Owner + "/" + s.Repo
-	}
+// keep stores a GET answer for conditional requests, pruning entries unused for an hour once the
+// cache is full.
+func (c *Client) keep(rawURL string, g cachedGet) {
 	c.mu.Lock()
-	t, ok := c.toks[key]
+	defer c.mu.Unlock()
+	if len(c.etags) >= maxETags {
+		for u, e := range c.etags {
+			if time.Since(e.used) > time.Hour {
+				delete(c.etags, u)
+			}
+		}
+		if len(c.etags) >= maxETags {
+			return
+		}
+	}
+	c.etags[rawURL] = g
+}
+
+// noteLimit records the rate limit GitHub reports for the installation the token belongs to.
+func (c *Client) noteLimit(bearer string, h http.Header) {
+	rem, err1 := strconv.Atoi(h.Get("X-RateLimit-Remaining"))
+	lim, err2 := strconv.Atoi(h.Get("X-RateLimit-Limit"))
+	if err1 != nil || err2 != nil {
+		return
+	}
+	reset, _ := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if owner, ok := c.owners[bearer]; ok {
+		c.limits[owner] = RateLimit{Limit: lim, Remaining: rem, Reset: time.Unix(reset, 0).UTC()}
+	}
+}
+
+// installToken is an access token for the installation that holds the scope, shared by every
+// scope of that installation and cached until a minute before it expires.
+func (c *Client) installToken(ctx context.Context, s reconcile.Scope) (string, error) {
+	c.mu.Lock()
+	id, known := c.insts[s.Key()]
+	t, ok := c.toks[id]
 	c.mu.Unlock()
-	if ok && time.Until(t.expires) > time.Minute {
+	if known && ok && time.Until(t.expires) > time.Minute {
 		return t.value, nil
 	}
 	jwt, err := c.appJWT()
 	if err != nil {
 		return "", err
 	}
-	path := "/orgs/" + s.Owner + "/installation"
-	if s.Kind == "repo" {
-		path = "/repos/" + s.Owner + "/" + s.Repo + "/installation"
-	}
-	var inst struct {
-		ID int64 `json:"id"`
-	}
-	if _, _, err := c.call(ctx, http.MethodGet, c.cfg.BaseURL+path, jwt, nil, &inst); err != nil {
-		return "", err
+	if !known {
+		path := "/orgs/" + s.Owner + "/installation"
+		if s.Kind == "repo" {
+			path = "/repos/" + s.Owner + "/" + s.Repo + "/installation"
+		}
+		var inst struct {
+			ID int64 `json:"id"`
+		}
+		if _, _, err := c.call(ctx, http.MethodGet, c.cfg.BaseURL+path, jwt, nil, &inst); err != nil {
+			return "", err
+		}
+		id = inst.ID
+		c.mu.Lock()
+		c.insts[s.Key()] = id
+		t, ok = c.toks[id]
+		c.mu.Unlock()
+		if ok && time.Until(t.expires) > time.Minute {
+			return t.value, nil
+		}
 	}
 	var tok struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if _, _, err := c.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", c.cfg.BaseURL, inst.ID), jwt, nil, &tok); err != nil {
+	if _, _, err := c.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", c.cfg.BaseURL, id), jwt, nil, &tok); err != nil {
+		c.mu.Lock()
+		delete(c.insts, s.Key()) // the installation may have moved: look it up again next time
+		c.mu.Unlock()
 		return "", err
 	}
 	c.mu.Lock()
-	c.toks[key] = token{tok.Token, tok.ExpiresAt}
+	if old, had := c.toks[id]; had {
+		delete(c.owners, old.value)
+	}
+	c.toks[id] = token{tok.Token, tok.ExpiresAt}
+	c.owners[tok.Token] = strings.ToLower(s.Owner)
 	c.mu.Unlock()
 	return tok.Token, nil
 }
@@ -381,4 +476,29 @@ func (c *Client) canTake(jobLabels []string) bool {
 		}
 	}
 	return ours
+}
+
+// RateLimit is what GitHub last reported for one installation.
+type RateLimit struct {
+	Limit     int       `json:"limit"`
+	Remaining int       `json:"remaining"`
+	Reset     time.Time `json:"reset"`
+}
+
+// RateLimits is the last reported limit per installation account.
+func (c *Client) RateLimits() map[string]RateLimit {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]RateLimit, len(c.limits))
+	for k, v := range c.limits {
+		out[k] = v
+	}
+	return out
+}
+
+func hasTotalCount(raw []byte) bool {
+	var probe struct {
+		TotalCount *int `json:"total_count"`
+	}
+	return json.Unmarshal(raw, &probe) == nil && probe.TotalCount != nil
 }

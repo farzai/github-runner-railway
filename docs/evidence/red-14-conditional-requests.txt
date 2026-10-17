@@ -1,0 +1,14 @@
+--- FAIL: TestASecondIdenticalReadIsConditionalAndReusesTheBody (0.14s)
+    conditional_test.go:44: 304s for [], want the two run lists and the jobs list
+--- FAIL: TestTwoRepoScopesOfOneInstallationShareOneToken (0.12s)
+    conditional_test.go:65: token requests 2 ([GET /repos/acme/app/installation POST /app/installations/55/access_tokens GET /repos/acme/app/actions/runners?per_page=100 GET /repos/acme/api/installation POST /app/installations/55/access_tokens GET /repos/acme/api/actions/runners?per_page=100 GET /repos/acme/app/actions/runners?per_page=100 GET /repos/acme/api/actions/runners?per_page=100]), want 1
+--- FAIL: TestTheRateLimitIsKeptPerInstallation (0.14s)
+    conditional_test.go:84: rate limits map[], want acme 4321/5000
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/ghapp	0.930s
+FAIL
+--- FAIL: TestALowGitHubRateLimitIsLoggedOncePerWindow (0.00s)
+    ratelimit_test.go:33: log "": want one warning for acme
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	0.354s
+FAIL

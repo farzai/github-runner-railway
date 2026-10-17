@@ -104,7 +104,7 @@ RUNNER_LABEL=railway
 MAX_RUNNERS=2
 ```
 
-`/healthz` answers 200 once a cycle has completed, and 503 when the last cycle is older than three polls or `ALERT_FAILED_CYCLES` cycles in a row have failed. Its JSON: `last_cycle`, `last_success`, `consecutive_failures`, `unreadable_scopes`, `services`, `queued`, `error`. The log line `controller up` shows the scopes,
+`/healthz` answers 200 once a cycle has completed, and 503 when the last cycle is older than three polls or `ALERT_FAILED_CYCLES` cycles in a row have failed. Its JSON: `last_cycle`, `last_success`, `consecutive_failures`, `unreadable_scopes`, `services`, `queued`, `error`. `github_rate_limits` shows the requests GitHub last reported left per installation account (a warning is logged once per window below a tenth). The log line `controller up` shows the scopes,
 label, prefix, image and limits it runs with.
 
 ### 4. Use it in a workflow
@@ -210,8 +210,9 @@ default images stay sudo-free.
   `os.availableParallelism()` reads the quota. Pass explicit `-j`/worker counts to be safe.
 * **Railway API:** 1,000 requests an hour per token. A job costs about four calls and a cycle one, so
   roughly 230 jobs an hour at the default poll; two controllers sharing one token share that budget.
-* **GitHub API:** 5,000 requests an hour per installation; each cycle reads queued runs and jobs per
-  repository of an `org:` scope. Prefer `repo:` scopes for large organizations.
+* **GitHub API:** 5,000 requests an hour per installation, shared by every scope of that installation
+  (one access token per installation). Run and job lists are read with `If-None-Match`, and an
+  unchanged list (`304`) does not count against the limit. Prefer `repo:` scopes for large organizations.
 * **Cold start** is the Railway deploy plus the image pull: about 20 s when the host has the image,
   longer on a host's first pull of a large image (see `docs/spike.md`).
 
