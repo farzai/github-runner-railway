@@ -40,8 +40,10 @@ Jobs use `runs-on: [self-hosted, railway-private]`.
 
 Each entry goes into `RUNNER_SCOPES` as `repo:<owner>/<name>` (all of the above are private; check that
 before adding one). Every repository that moves also needs its actionlint config to know the label
-(`.github/actionlint.yaml`: `self-hosted-runner: labels: [railway-private]`) and no `docker://` action or
-`docker` step, because the runners have no Docker daemon.
+(`.github/actionlint.yaml`: a `self-hosted-runner:` key holding `labels:` with `railway-private`, as in
+skyabove) and no Docker at all, because the runners have no Docker daemon: no `docker://` or other
+Docker-based action, no `docker` step, no job `container:` and no `services:` (Polity's Postgres needs a
+runner image variant instead).
 
 ## Before a controller can start (owner)
 
