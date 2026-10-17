@@ -1,0 +1,13 @@
+--- FAIL: TestOneRunnerPerQueuedJob (0.00s)
+--- FAIL: TestARunnerThatIsStartingOrIdleCoversAQueuedJob (0.00s)
+--- FAIL: TestABusyRunnerDoesNotCoverAQueuedJob (0.00s)
+--- FAIL: TestScopesAreCountedApart (0.00s)
+--- FAIL: TestTheTotalIsCappedAndScopesShareTheRoomInTurn (0.00s)
+--- FAIL: TestCreationPerCycleIsBounded (0.00s)
+--- FAIL: TestADeadServiceIsReapedNotCounted (0.00s)
+--- FAIL: TestAnIdleRunnerBeyondTheDemandIsReapedAfterItsTTLOldestFirst (0.00s)
+--- FAIL: TestAServiceBeyondTheMaxAgeIsReapedEvenWhenBusy (0.00s)
+--- FAIL: TestAServiceOfAnUnknownScopeIsReapedOnceItIsPastTheGrace (0.00s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/reconcile	0.493s
+FAIL
