@@ -4,7 +4,12 @@
 runners: a job from a public repository (anyone can open a pull request) could reach a concurrent private
 job through the shared Railway private network (SECURITY.md), so there is one pool and it never takes a
 public repository. The farzai runner group `railway` (id 3) has "Allow public repositories" **off**, so a
-public repository cannot land on the pool even by a wrong `runs-on`.
+public repository cannot land on a runner of an org scope even by a wrong `runs-on`.
+
+**`RUNNER_SCOPES` is the real guard.** The controller only makes runners for the scopes it lists, and a
+`repo:` scope makes repository-scoped runners that only that repository can use, so listing private
+repositories one by one and no org scope is what keeps public repositories off the pool. The group
+setting is a second layer for org scopes only; it does not apply to a `repo:` scope.
 
 | | Private pool |
 | --- | --- |
@@ -30,8 +35,13 @@ Jobs use `runs-on: [self-hosted, railway-private]`.
 1. `parsilver/skyabove` (pilot).
 2. `farzai/polity.farzai.com` phase 1 (Game Lead, issue #154; needs `MAX_JOB_MINUTES` of at least 360;
    Polity's Postgres and WebKit needs are a separate runner image variant).
-3. lottery-matching, geonames-data, thailand-address-data (not its `fetch` job, which stays on the Mac
-   runner), then `parsilver/me.farzai.com` (CI only).
+3. `parsilver/lottery-matching`, `parsilver/geonames-data`, `parsilver/thailand-address-data` (not its
+   `fetch` job, which stays on the Mac runner), then `parsilver/me.farzai.com` (CI only).
+
+Each entry goes into `RUNNER_SCOPES` as `repo:<owner>/<name>` (all of the above are private; check that
+before adding one). Every repository that moves also needs its actionlint config to know the label
+(`.github/actionlint.yaml`: `self-hosted-runner: labels: [railway-private]`) and no `docker://` action or
+`docker` step, because the runners have no Docker daemon.
 
 ## Before a controller can start (owner)
 
@@ -43,7 +53,9 @@ Jobs use `runs-on: [self-hosted, railway-private]`.
    request workflows from all outside collaborators.
 4. Make the GHCR packages public (`github-runner-railway` for the runner, `github-runner-railway-controller`
    for the controller), or give Railway registry credentials.
-5. Create the **Runner Private** Railway project and give its project token to the private controller.
+5. The runner Railway project (`d40ef972-...`, currently named Runner Public) already exists. Give its
+   project token to the controller as `RUNNER_RAILWAY_TOKEN`; the controller service itself lives in the
+   separate Runner Controller project.
 
 ## The controller service (Runner Controller project)
 
