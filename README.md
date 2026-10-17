@@ -86,6 +86,11 @@ See [SECURITY.md](SECURITY.md). In short: ephemeral JIT runners that take one jo
 holds only its own JIT config; the controller (which holds the App key and the Railway token) runs in
 a **different Railway project** from the runners; fork-PR workflows must require approval.
 
+## Deploying
+
+See [docs/deploy.md](docs/deploy.md): two Railway projects, the owner's one-time steps, the controller's
+variables, rollout and rollback.
+
 ## Develop
 
 ```
