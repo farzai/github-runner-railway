@@ -5,12 +5,6 @@ the major version is 0, a minor release may change configuration (each such chan
 
 ## [Unreleased]
 
-### Fixed
-- A service in the runner project whose name merely started with `RUNNER_SERVICE_PREFIX` (for example `rr-postgres`) was listed as a runner and deleted once older than `MAX_JOB_MINUTES`. Only exact runner names (`<prefix><6 hex>-<6 hex>`) are listed now.
-
-### Added
-- docs/deploy.md: sharing the runner project with long-lived services, a sizing guide, and Railway's limits (usage limits are per workspace).
-
 ### Changed
 - A queued-job webhook starts a cycle after a 3 s debounce instead of a fixed 20 s; cycles still start at least 20 s apart (measured from the previous cycle's start).
 
