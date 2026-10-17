@@ -97,5 +97,22 @@ RUN chmod 0755 /usr/local/bin/ci-postgres \
 USER runner
 WORKDIR /home/runner
 
+# The sudo variant (target `sudo`, opt-in, private repositories only): the base plus passwordless
+# sudo for the runner user, for workflows that run `sudo apt-get install`, `playwright install
+# --with-deps` or `ldconfig`. Each job is its own container, so root stays inside that job's
+# container; it still shares the runner project's private network with concurrent jobs.
+FROM base AS sudo
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "runner ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/runner \
+ && chmod 0440 /etc/sudoers.d/runner \
+ && (grep -qE '^[@#]includedir /etc/sudoers.d' /etc/sudoers || echo '@includedir /etc/sudoers.d' >> /etc/sudoers) \
+ && visudo -c \
+ && runuser -u runner -- sudo -n true
+USER runner
+WORKDIR /home/runner
+
 # The default target stays the plain runner image.
 FROM base

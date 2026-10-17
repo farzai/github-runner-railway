@@ -65,6 +65,7 @@ jobs:
         include:
           - {name: runner, kind: runner, context: image, target: base, image: '', prefix: ''}
           - {name: runner-pg, kind: runner, context: image, target: pg, image: '', prefix: 'pg-'}
+          - {name: runner-sudo, kind: runner, context: image, target: sudo, image: '', prefix: 'sudo-'}
           - {name: controller, kind: controller, context: ., target: '', image: '-controller', prefix: ''}
     steps:
       - id: want
@@ -120,3 +121,16 @@ jobs:
           # only pushes write the cache: a pull request's cache is not readable from main and would
           # only use up the repository's cache space
           cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
+
+  # The derived-image example builds on the latest release, the way a user would build theirs; it is
+  # never pushed.
+  example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: examples/derived
+          platforms: linux/amd64
+          push: false
