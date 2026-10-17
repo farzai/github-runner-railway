@@ -11,6 +11,9 @@ the major version is 0, a minor release may change configuration (each such chan
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.
 
 ### Added
+- Redis variant (`:redis-<sha>`, `:redis-vX.Y.Z`): the base image plus a pinned redis-server from packages.redis.io and `ci-redis start|stop`, a per-job server on 127.0.0.1 that writes `CI_REDIS_URL`. The pg target takes `REDIS_VERSION` to include it too. CI smoke-tests both.
+
+### Added
 - `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
 
 ### Fixed

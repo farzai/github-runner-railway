@@ -66,6 +66,7 @@ jobs:
           - {name: runner, kind: runner, context: image, target: base, image: '', prefix: ''}
           - {name: runner-pg, kind: runner, context: image, target: pg, image: '', prefix: 'pg-'}
           - {name: runner-sudo, kind: runner, context: image, target: sudo, image: '', prefix: 'sudo-'}
+          - {name: runner-redis, kind: runner, context: image, target: redis, image: '', prefix: 'redis-'}
           - {name: controller, kind: controller, context: ., target: '', image: '-controller', prefix: ''}
     steps:
       - id: want
@@ -176,3 +177,28 @@ jobs:
           # shellcheck disable=SC2086 # CHECK is a space-separated list of extensions
           docker run --rm -v "$PWD/image/smoke-pg.sh:/tmp/smoke-pg.sh:ro" --entrypoint bash \
             "runner-pg-smoke:${MAJOR}" /tmp/smoke-pg.sh "${MAJOR}" ${CHECK}
+
+  # Builds the redis target and the pg target with REDIS_VERSION, and runs image/smoke-redis.sh in
+  # each as the runner user (ci-redis start, SET/GET, stop). Not pushed.
+  redis-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {target: redis, args: ''}
+          - {target: pg, args: 'REDIS_VERSION=6:8.10.2-1rl1~noble1'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: image
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          load: true
+          tags: runner-redis-smoke:${{ matrix.target }}
+          build-args: ${{ matrix.args }}
+      - name: Smoke test
+        env:
+          TARGET: ${{ matrix.target }}
+        run: docker run --rm -v "$PWD/image/smoke-redis.sh:/tmp/smoke-redis.sh:ro" --entrypoint bash "runner-redis-smoke:${TARGET}" /tmp/smoke-redis.sh

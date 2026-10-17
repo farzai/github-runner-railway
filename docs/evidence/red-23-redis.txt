@@ -1,0 +1,1 @@
+/tmp/s.sh: line 8: ci-redis: command not found

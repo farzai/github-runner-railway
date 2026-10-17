@@ -99,6 +99,15 @@ RUN curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/nod
 # webkit` finds them and downloads nothing. The directory belongs to the runner user: a job whose
 # Playwright is newer than the image still downloads its own browsers there (one container, one job).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Redis too when REDIS_VERSION is set (empty by default, so the published pg image is unchanged).
+ARG REDIS_VERSION=""
+ARG REDIS_KEY_SHA256=817b5a78358d00ed6b71884d70ad5d2eab9934badca1a34299fdc6a2e4a8ad20
+COPY install-redis.sh ci-redis /tmp/redis/
+RUN if [ -n "${REDIS_VERSION}" ]; then \
+      REDIS_VERSION="${REDIS_VERSION}" REDIS_KEY_SHA256="${REDIS_KEY_SHA256}" bash /tmp/redis/install-redis.sh \
+      && install -m 0755 /tmp/redis/ci-redis /usr/local/bin/ci-redis; \
+    fi \
+ && rm -rf /tmp/redis
 COPY ci-postgres /usr/local/bin/ci-postgres
 RUN chmod 0755 /usr/local/bin/ci-postgres \
  && ln -s "/usr/lib/postgresql/${PG_MAJOR}/bin/initdb" /usr/local/bin/initdb \
@@ -122,6 +131,19 @@ RUN apt-get update \
  && (grep -qE '^[@#]includedir /etc/sudoers.d' /etc/sudoers || echo '@includedir /etc/sudoers.d' >> /etc/sudoers) \
  && visudo -c \
  && runuser -u runner -- sudo -n true
+USER runner
+WORKDIR /home/runner
+
+# The Redis variant (target `redis`): the base plus a pinned redis-server and ci-redis, for jobs that
+# need Redis without Postgres. (The pg target takes REDIS_VERSION to have both.)
+FROM base AS redis
+USER root
+ARG REDIS_VERSION=6:8.10.2-1rl1~noble1
+ARG REDIS_KEY_SHA256=817b5a78358d00ed6b71884d70ad5d2eab9934badca1a34299fdc6a2e4a8ad20
+COPY install-redis.sh ci-redis /tmp/redis/
+RUN bash /tmp/redis/install-redis.sh \
+ && install -m 0755 /tmp/redis/ci-redis /usr/local/bin/ci-redis \
+ && rm -rf /tmp/redis
 USER runner
 WORKDIR /home/runner
 
