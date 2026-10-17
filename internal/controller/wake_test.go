@@ -47,7 +47,8 @@ func (g *countingGH) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]ghapp
 
 // Ten nudges inside the debounce window are one cycle.
 func TestABurstOfNudgesInsideTheDebounceIsOneCycle(t *testing.T) {
-	gh := &countingGH{}
+	// a job is queued, so the nudged cycle finds work and no retry follows
+	gh := &countingGH{fakeGH: fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "acme/app", CreatedAt: now}}}}}
 	c := New(Config{Scopes: []reconcile.Scope{repo}, Prefix: "rr-", MaxRunners: 1, MaxCreatePerCycle: 1,
 		StartupGrace: time.Minute, IdleTTL: time.Minute, MaxAge: time.Hour,
 		Interval: time.Hour, MinGap: time.Millisecond, Debounce: 150 * time.Millisecond}, gh, &fakeRW{})
@@ -65,5 +66,42 @@ func TestABurstOfNudgesInsideTheDebounceIsOneCycle(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	if got := gh.reads.Load(); got != 2 {
 		t.Fatalf("cycles %d, want 2: the start-up cycle and one for the burst", got)
+	}
+}
+
+type laggingGH struct {
+	fakeGH
+	reads    atomic.Int32
+	listFrom int32 // the job shows up from this read on
+}
+
+func (g *laggingGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, error) {
+	if g.reads.Add(1) >= g.listFrom {
+		return []ghapp.Job{{ID: 1, Repo: "acme/app", CreatedAt: now}}, nil
+	}
+	return nil, nil
+}
+
+// GitHub may not list a job yet when the debounced cycle reads it. A webhook-driven cycle that found
+// nothing queued checks once more after MinGap instead of leaving the job to the next poll.
+func TestAWebhookCycleThatFindsNothingChecksOnceMoreAfterTheGap(t *testing.T) {
+	gh := &laggingGH{listFrom: 3} // read 1: start-up cycle, read 2: the webhook cycle, read 3: the retry
+	rw := &fakeRW{}
+	c := New(Config{Scopes: []reconcile.Scope{repo}, Prefix: "rr-", MaxRunners: 1, MaxCreatePerCycle: 1,
+		StartupGrace: time.Minute, IdleTTL: time.Minute, MaxAge: time.Hour,
+		Interval: time.Hour, MinGap: 200 * time.Millisecond, Debounce: 20 * time.Millisecond}, gh, rw)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+	for gh.reads.Load() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.Nudge()
+	time.Sleep(time.Second)
+	if gh.reads.Load() != 3 {
+		t.Fatalf("reads %d, want 3: start-up, the webhook cycle and one retry", gh.reads.Load())
+	}
+	if c.Status().Services == 0 {
+		t.Fatal("the job listed on the retry got no runner")
 	}
 }

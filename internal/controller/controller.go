@@ -132,20 +132,32 @@ func (c *Controller) Status() Status {
 
 // Run cycles until ctx ends: on every interval and on every nudge. A nudge waits out the debounce
 // (and the rest of MinGap since the previous cycle started); nudges that arrive meanwhile are the
-// same cycle.
+// same cycle. GitHub may not list a just-queued job yet, so a nudged cycle that found nothing
+// queued checks once more after MinGap. The interval restarts after every cycle, so a tick never
+// follows a nudged cycle straight away.
 func (c *Controller) Run(ctx context.Context) {
 	t := time.NewTicker(c.cfg.Interval)
 	defer t.Stop()
+	var retry <-chan time.Time
+	nudged := false
 	for {
 		lastStart := time.Now()
 		if err := c.Cycle(ctx); err != nil {
 			c.cfg.Log.Error("cycle failed", "err", err.Error())
 		}
+		t.Reset(c.cfg.Interval)
+		retry = nil
+		if nudged && c.Status().Queued == 0 {
+			retry = time.After(c.cfg.MinGap)
+		}
+		nudged = false
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-retry:
 		case <-c.wake:
+			nudged = true
 			select {
 			case <-ctx.Done():
 				return
