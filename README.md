@@ -52,7 +52,7 @@ repositories, and turn on "Allow public repositories" there only if public repos
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (PEM may keep `\n` escaped) | required |
-| `RAILWAY_API_TOKEN`, `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project | required |
+| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project (not `RAILWAY_*`: Railway injects those for the controller's own project) | required |
 | `RUNNER_IMAGE` | the runner image, pinned: `ghcr.io/farzai/github-runner-railway:<commit sha>` (CI publishes only sha tags) | required |
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
 | `RUNNER_LABEL` | the `runs-on` label | `railway-farzai` |

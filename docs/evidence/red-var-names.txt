@@ -1,0 +1,19 @@
+--- FAIL: TestLoadParsesScopesAndDefaults (0.00s)
+    config_test.go:23: config: RAILWAY_API_TOKEN is not set
+--- FAIL: TestLoadRefusesWhatIsMissingOrMalformedAndNamesOnlyTheVariable (0.00s)
+    config_test.go:39: without RUNNER_RAILWAY_TOKEN: err config: RAILWAY_API_TOKEN is not set
+    config_test.go:39: without RUNNER_RAILWAY_PROJECT_ID: err config: RAILWAY_API_TOKEN is not set
+    config_test.go:39: without RUNNER_RAILWAY_ENVIRONMENT_ID: err config: RAILWAY_API_TOKEN is not set
+    config_test.go:39: without RUNNER_IMAGE: err config: RAILWAY_API_TOKEN is not set
+    config_test.go:39: without RUNNER_SCOPES: err config: RAILWAY_API_TOKEN is not set
+--- FAIL: TestAnOrgScopeNeedsAnExplicitNonDefaultRunnerGroup (0.00s)
+    config_test.go:79: an org scope with no group: err config: RAILWAY_API_TOKEN is not set
+    config_test.go:87: group 7: config: RAILWAY_API_TOKEN is not set scopes= label= image= max=0 interval=0s
+    config_test.go:93: repo scopes use the default group by necessity and need none: config: RAILWAY_API_TOKEN is not set
+--- FAIL: TestTheRunnerProjectComesFromVariablesRailwayDoesNotInject (0.00s)
+    config_test.go:107: config: RAILWAY_API_TOKEN is not set
+--- FAIL: TestTheControllerRefusesToManageTheProjectItRunsIn (0.00s)
+    config_test.go:118: err config: RAILWAY_API_TOKEN is not set: runner services created beside the controller share its private network
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/config	0.401s
+FAIL
