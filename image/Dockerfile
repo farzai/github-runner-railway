@@ -53,12 +53,20 @@ ARG PG_MAJOR=18
 # The live repository keeps only recent point releases; the archive keeps every one, so this pin
 # still builds after it is pruned.
 ARG PG_VERSION=18.6-1.pgdg24.04+2
+# PGDG extension packages of the same major, each pinned: space-separated "package=version", e.g.
+# "postgresql-16-partman=5.5.0-1.pgdg24.04+1". Empty by default.
+ARG PG_EXTENSIONS=""
 # sha256 of https://www.postgresql.org/media/keys/ACCC4CF8.asc (PGDG signing key)
 ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
 ARG NODE_VERSION=22.23.3
 ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 ARG PLAYWRIGHT_VERSION=1.63.0
-RUN curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+RUN set -f \
+ && for p in ${PG_EXTENSIONS}; do \
+      echo "${p}" | grep -Eqx "postgresql-${PG_MAJOR}-[a-z0-9][a-z0-9.+-]*=[0-9][A-Za-z0-9.+:~-]*" \
+        || { echo "PG_EXTENSIONS entry ${p} is not postgresql-${PG_MAJOR}-<name>=<version>" >&2; exit 1; }; \
+    done \
+ && curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
  && echo "${PGDG_KEY_SHA256}  /tmp/pgdg.asc" | sha256sum -c - \
  && install -d /usr/share/postgresql-common/pgdg \
  && install -m 0644 /tmp/pgdg.asc /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
@@ -71,6 +79,9 @@ RUN curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.a
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       "postgresql-${PG_MAJOR}=${PG_VERSION}" "postgresql-client-${PG_MAJOR}=${PG_VERSION}" \
+ && if [ -n "${PG_EXTENSIONS}" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${PG_EXTENSIONS}; \
+    fi \
  && rm -f /tmp/pgdg.asc
 # Playwright's own list of system libraries for Chromium and WebKit, and its browsers, installed
 # with a pinned Node and Playwright that are removed again: jobs bring their own Node

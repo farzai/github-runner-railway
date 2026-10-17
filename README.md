@@ -162,6 +162,21 @@ and the `pg-` image, in the same runner project. Each controller lists and remov
 services and only takes jobs that ask for its label. A GitHub App has one webhook URL, so the second
 controller works on polling alone (set `POLL_SECONDS=60`).
 
+The published `pg-` image has PostgreSQL 18 and no extensions. Build your own with another major and
+PGDG extensions (all pinned, from the signed PGDG repository) and push it to your registry:
+
+```
+docker build --platform linux/amd64 --target pg \
+  --build-arg PG_MAJOR=16 --build-arg PG_VERSION=16.15-1.pgdg24.04+2 \
+  --build-arg "PG_EXTENSIONS=postgresql-16-partman=5.5.0-1.pgdg24.04+1" \
+  -t ghcr.io/<you>/runner-pg16:1 image/
+```
+
+`PG_MAJOR` (16, 17 or 18), `PG_VERSION` (that major's exact PGDG package version), and
+`PG_EXTENSIONS` (space-separated `postgresql-<major>-<name>=<version>`; anything else fails the build).
+Find versions with `apt-cache madison` against PGDG, or in its package index. `image/smoke-pg.sh
+<major> [extension ...]` checks a built image (CI runs it for 18 and for 16 with pg_partman).
+
 In a job on the `pg` image, start a throwaway database inside the job's own container:
 
 ```yaml
