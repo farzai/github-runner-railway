@@ -53,18 +53,18 @@ repositories, and turn on "Allow public repositories" there only if public repos
 | --- | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (PEM may keep `\n` escaped) | required |
 | `RAILWAY_API_TOKEN`, `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project | required |
-| `RUNNER_IMAGE` | image the runner services use, e.g. `ghcr.io/farzai/github-runner-railway:latest` | required |
+| `RUNNER_IMAGE` | the runner image, pinned: `ghcr.io/farzai/github-runner-railway:<commit sha>` (CI publishes only sha tags) | required |
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
 | `RUNNER_LABEL` | the `runs-on` label | `railway-farzai` |
-| `RUNNER_GROUP_ID` | runner group of org runners | `1` |
+| `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an org scope and the Default group (1) is refused | none |
 | `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | cap of services in all / created in a cycle | `8` / `4` |
-| `POLL_SECONDS` | polling period | `120` |
+| `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner, at least 20 s after the last) | `120` |
 | `STARTUP_GRACE_SECONDS` / `IDLE_TTL_SECONDS` | time to register / keep a surplus idle runner | `300` / `120` |
 | `MAX_JOB_MINUTES` | job timeout; a service older than this plus 10 minutes is removed | `360` |
 | `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | alert when a job waits this long with no runner coming | `5` / none |
 | `PORT` | HTTP port | `8080` |
 
-Use it in a workflow with `runs-on: [self-hosted, railway-farzai]`.
+Use it in a workflow with `runs-on: [self-hosted, railway-farzai]` (always name the railway label, since the runners also carry `self-hosted`, `linux` and `x64`). A job that asks for any other label is not served and is not counted as demand.
 
 ## Limits worth knowing
 
@@ -77,6 +77,7 @@ Use it in a workflow with `runs-on: [self-hosted, railway-farzai]`.
 * **No sudo** in the image, so `sudo apt-get install` fails; use `setup-*` actions or tools in the image.
 * **pids and cores:** each container caps processes at about 1,000 and `nproc` shows the host's cores,
   not the container's: pass an explicit `-j` to compilers.
+* **Runner health:** a JIT runner is registered the moment it is made and shows offline until its container connects; one still offline after `STARTUP_GRACE_SECONDS` is treated as hung and removed with its service.
 * **Cold start** is the Railway deploy plus the image pull; see `docs/spike.md` for measurements.
 
 ## Security model

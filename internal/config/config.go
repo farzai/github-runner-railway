@@ -90,7 +90,7 @@ func Load(get func(string) string) (Config, error) {
 	c.Label = str("RUNNER_LABEL", "railway-farzai")
 	c.Port = str("PORT", "8080")
 	c.AlertURL = strings.TrimSpace(get("ALERT_WEBHOOK_URL"))
-	c.RunnerGroupID = num("RUNNER_GROUP_ID", 1)
+	c.RunnerGroupID = num("RUNNER_GROUP_ID", 0)
 	c.MaxRunners = num("MAX_RUNNERS", 8)
 	c.MaxCreatePerCycle = num("MAX_CREATE_PER_CYCLE", 4)
 	c.Interval = time.Duration(num("POLL_SECONDS", 120)) * time.Second
@@ -100,6 +100,11 @@ func Load(get func(string) string) (Config, error) {
 	c.AlertAfter = time.Duration(num("ALERT_QUEUED_MINUTES", 5)) * time.Minute
 	if err != nil {
 		return Config{}, err
+	}
+	for _, sc := range c.Scopes {
+		if sc.Kind == "org" && (c.RunnerGroupID == 0 || c.RunnerGroupID == 1) {
+			return Config{}, fmt.Errorf("config: RUNNER_GROUP_ID must name a dedicated runner group (not the Default group, 1) for an org scope")
+		}
 	}
 	if c.MaxRunners < 1 || c.MaxCreatePerCycle < 1 || c.Interval < 10*time.Second {
 		return Config{}, fmt.Errorf("config: MAX_RUNNERS and MAX_CREATE_PER_CYCLE must be at least 1 and POLL_SECONDS at least 10")

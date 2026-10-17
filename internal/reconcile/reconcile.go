@@ -43,9 +43,10 @@ type Service struct {
 
 // Runner is one runner GitHub knows of in a scope.
 type Runner struct {
-	ID   int64
-	Name string
-	Busy bool
+	ID      int64
+	Name    string
+	Busy    bool
+	Offline bool // registered but not connected: a JIT runner is offline until its container starts
 }
 
 // Params are the knobs.
@@ -87,8 +88,8 @@ type Plan struct {
 
 // Make is the plan for one cycle.
 //
-// A service is supply for its scope while it is starting (no runner yet, inside the startup
-// grace) or idle (registered, not busy). A busy runner is never touched, except past MaxAge,
+// A service is supply for its scope while it is starting (no runner yet, or one that is still
+// offline, inside the startup grace) or idle (registered, online, not busy). A busy runner is never touched, except past MaxAge,
 // and a service whose container ended or that never registered is dead and goes. An idle
 // runner beyond the demand goes once it is older than IdleTTL, oldest first. New services
 // are created for the jobs supply does not cover, up to MaxRunners in all and
@@ -110,8 +111,10 @@ func Make(in Input) Plan {
 		age := in.Now.Sub(sv.CreatedAt)
 		sc, ok := known[sv.ScopeHash]
 		if !ok {
-			if age > in.Params.StartupGrace {
-				p.Reap = append(p.Reap, Reap{Service: sv, Reason: "unknown scope"})
+			// a scope taken out of the configuration may still have a job running: its services
+			// go when their container ended or when the job timeout has passed
+			if sv.Exited || age > in.Params.MaxAge {
+				p.Reap = append(p.Reap, Reap{Service: sv, Reason: "scope no longer configured"})
 			} else {
 				alive++
 			}
@@ -137,7 +140,11 @@ func Make(in Input) Plan {
 			p.Reap = append(p.Reap, Reap{Service: sv, Scope: key, Reason: "never registered"})
 		case runner != nil && runner.Busy:
 			alive++
-		case runner == nil:
+		case runner != nil && runner.Offline && age > in.Params.StartupGrace:
+			// a JIT runner is registered the moment it is made and stays offline until its
+			// container connects: offline past the grace means the container is hung or gone
+			p.Reap = append(p.Reap, Reap{Service: sv, Scope: key, RunnerID: runner.ID, Reason: "never came online"})
+		case runner == nil || runner.Offline:
 			alive++
 			supply[key]++
 		default:

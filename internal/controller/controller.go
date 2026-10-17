@@ -15,6 +15,7 @@ import (
 
 	"github.com/farzai/github-runner-railway/internal/ghapp"
 	"github.com/farzai/github-runner-railway/internal/reconcile"
+	"github.com/farzai/github-runner-railway/internal/webhook"
 )
 
 // GH is the GitHub side.
@@ -43,6 +44,7 @@ type Config struct {
 	MaxAge            time.Duration
 	AlertAfter        time.Duration // a job queued this long with no runner coming is an alert
 	Interval          time.Duration // the polling period; a webhook wakes a cycle sooner
+	MinGap            time.Duration // at least this long between a wake-up and the next cycle
 	Alert             func(msg string)
 	Log               *slog.Logger
 }
@@ -55,7 +57,7 @@ type Controller struct {
 	now     func() time.Time
 	wake    chan struct{}
 	mu      sync.Mutex
-	alerted map[int64]bool
+	alerted map[int64]string // job id -> scope key
 	status  Status
 }
 
@@ -75,10 +77,21 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 	if cfg.Alert == nil {
 		cfg.Alert = func(string) {}
 	}
+	if cfg.MinGap <= 0 {
+		cfg.MinGap = 20 * time.Second
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Minute
 	}
-	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]bool{}}
+	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{}}
+}
+
+// OnEvent is the webhook handler. Only a queued job can need a new runner; the rest wait for
+// the next poll, since every wake-up costs a scan of GitHub.
+func (c *Controller) OnEvent(e webhook.Event) {
+	if e.Action == "queued" {
+		c.Nudge()
+	}
 }
 
 // Nudge asks for a cycle soon; many nudges are one.
@@ -109,7 +122,7 @@ func (c *Controller) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-c.wake:
-			time.Sleep(2 * time.Second) // let a burst of events land in one cycle
+			time.Sleep(c.cfg.MinGap) // let a burst of events land in one cycle, and bound the scan rate
 		}
 	}
 }
@@ -258,15 +271,15 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 		}
 		for _, j := range js {
 			live[j.ID] = true
-			if coming > 0 || c.alerted[j.ID] || j.CreatedAt.IsZero() || now.Sub(j.CreatedAt) < c.cfg.AlertAfter {
+			if _, done := c.alerted[j.ID]; coming > 0 || done || j.CreatedAt.IsZero() || now.Sub(j.CreatedAt) < c.cfg.AlertAfter {
 				continue
 			}
-			c.alerted[j.ID] = true
+			c.alerted[j.ID] = key
 			c.cfg.Alert(fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
 		}
 	}
-	for id := range c.alerted {
-		if !live[id] {
+	for id, key := range c.alerted {
+		if _, readable := jobs[key]; readable && !live[id] { // a scope that could not be read keeps its marks
 			delete(c.alerted, id)
 		}
 	}

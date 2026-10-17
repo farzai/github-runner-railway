@@ -26,6 +26,9 @@ import (
 	"github.com/farzai/github-runner-railway/internal/reconcile"
 )
 
+// maxPages bounds a listing; more is an error, not a silently short answer.
+const maxPages = 50
+
 // ErrBusy is GitHub refusing to delete a runner that is running a job.
 var ErrBusy = errors.New("ghapp: runner is busy")
 
@@ -80,6 +83,8 @@ func New(cfg Config) (*Client, error) {
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
+	// A redirect would carry the Authorization header to wherever it points: never follow one.
+	cfg.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Client{cfg: cfg, key: key, toks: map[string]token{}}, nil
 }
 
@@ -184,7 +189,10 @@ func scopePath(s reconcile.Scope) string {
 func (c *Client) each(ctx context.Context, first, bearer string, page func() any, done func()) error {
 	base, _ := url.Parse(c.cfg.BaseURL)
 	next := first
-	for i := 0; next != "" && i < 50; i++ {
+	for i := 0; next != ""; i++ {
+		if i >= maxPages {
+			return fmt.Errorf("ghapp: more than %d pages of %s", maxPages, base.Host)
+		}
 		into := page()
 		hdr, _, err := c.call(ctx, http.MethodGet, next, bearer, nil, into)
 		if err != nil {
@@ -195,7 +203,7 @@ func (c *Client) each(ctx context.Context, first, bearer string, page func() any
 		for _, part := range strings.Split(hdr.Get("Link"), ",") {
 			if strings.Contains(part, `rel="next"`) {
 				if lo, hi := strings.Index(part, "<"), strings.Index(part, ">"); lo >= 0 && hi > lo {
-					if u, err := url.Parse(part[lo+1 : hi]); err == nil && u.Host == base.Host {
+					if u, err := url.Parse(part[lo+1 : hi]); err == nil && u.Host == base.Host && u.Scheme == base.Scheme {
 						next = u.String()
 					}
 				}
@@ -241,14 +249,15 @@ func (c *Client) Runners(ctx context.Context, s reconcile.Scope) ([]reconcile.Ru
 	var out []reconcile.Runner
 	var cur struct {
 		Runners []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
-			Busy bool   `json:"busy"`
+			ID     int64  `json:"id"`
+			Name   string `json:"name"`
+			Busy   bool   `json:"busy"`
+			Status string `json:"status"`
 		} `json:"runners"`
 	}
 	err = c.each(ctx, c.cfg.BaseURL+scopePath(s)+"/actions/runners?per_page=100", tok, func() any { cur.Runners = nil; return &cur }, func() {
 		for _, r := range cur.Runners {
-			out = append(out, reconcile.Runner{ID: r.ID, Name: r.Name, Busy: r.Busy})
+			out = append(out, reconcile.Runner{ID: r.ID, Name: r.Name, Busy: r.Busy, Offline: r.Status == "offline"})
 		}
 	})
 	return out, err
@@ -311,15 +320,22 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 	var out []Job
 	for _, repo := range repos {
 		for _, status := range []string{"queued", "in_progress"} {
+			var runIDs []int64
 			var runs struct {
 				Runs []struct {
 					ID int64 `json:"id"`
 				} `json:"workflow_runs"`
 			}
-			if _, _, err := c.call(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/actions/runs?status=%s&per_page=100", c.cfg.BaseURL, repo, status), tok, nil, &runs); err != nil {
+			err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs?status=%s&per_page=100", c.cfg.BaseURL, repo, status), tok,
+				func() any { runs.Runs = nil; return &runs }, func() {
+					for _, r := range runs.Runs {
+						runIDs = append(runIDs, r.ID)
+					}
+				})
+			if err != nil {
 				return nil, err
 			}
-			for _, run := range runs.Runs {
+			for _, id := range runIDs {
 				var jobs struct {
 					Jobs []struct {
 						ID        int64     `json:"id"`
@@ -328,15 +344,18 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 						CreatedAt time.Time `json:"created_at"`
 					} `json:"jobs"`
 				}
-				if _, _, err := c.call(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", c.cfg.BaseURL, repo, run.ID), tok, nil, &jobs); err != nil {
+				err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", c.cfg.BaseURL, repo, id), tok,
+					func() any { jobs.Jobs = nil; return &jobs }, func() {
+						for _, j := range jobs.Jobs {
+							if j.Status != "queued" || seen[j.ID] || !c.canTake(j.Labels) {
+								continue
+							}
+							seen[j.ID] = true
+							out = append(out, Job{ID: j.ID, Repo: repo, CreatedAt: j.CreatedAt})
+						}
+					})
+				if err != nil {
 					return nil, err
-				}
-				for _, j := range jobs.Jobs {
-					if j.Status != "queued" || seen[j.ID] || !hasLabel(j.Labels, c.cfg.Label) {
-						continue
-					}
-					seen[j.ID] = true
-					out = append(out, Job{ID: j.ID, Repo: repo, CreatedAt: j.CreatedAt})
 				}
 			}
 		}
@@ -344,11 +363,19 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 	return out, nil
 }
 
-func hasLabel(ls []string, want string) bool {
-	for _, l := range ls {
-		if l == want {
-			return true
+// canTake: a runner of ours has self-hosted, linux, x64 (GitHub adds the last two) and our
+// label, so it can take a job only if every label the job asks for is one of those and ours is
+// among them. Labels compare without case.
+func (c *Client) canTake(jobLabels []string) bool {
+	ours := false
+	for _, l := range jobLabels {
+		switch strings.ToLower(l) {
+		case strings.ToLower(c.cfg.Label):
+			ours = true
+		case "self-hosted", "linux", "x64":
+		default:
+			return false
 		}
 	}
-	return false
+	return ours
 }

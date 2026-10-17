@@ -171,20 +171,56 @@ func TestAServiceBeyondTheMaxAgeIsReapedEvenWhenBusy(t *testing.T) {
 	}
 }
 
-func TestAServiceOfAnUnknownScopeIsReapedOnceItIsPastTheGrace(t *testing.T) {
-	stray := Service{ID: "id-s", Name: "rr-s", ScopeHash: "ffffff", CreatedAt: now.Add(-10 * time.Minute)}
-	young := Service{ID: "id-y", Name: "rr-y", ScopeHash: "ffffff", CreatedAt: now.Add(-time.Second)}
-	p := plan(Input{Services: []Service{stray, young}})
-	if _, ok := reaped(p, "rr-s"); !ok {
-		t.Error("a stray service must go")
-	}
-	if _, ok := reaped(p, "rr-y"); ok {
-		t.Error("a young stray gets its grace")
+func TestAnExitedServiceOfAnUnknownScopeIsReapedAtOnce(t *testing.T) {
+	stray := Service{ID: "id-s", Name: "rr-s", ScopeHash: "ffffff", CreatedAt: now.Add(-10 * time.Minute), Exited: true}
+	if _, ok := reaped(plan(Input{Services: []Service{stray}}), "rr-s"); !ok {
+		t.Error("an exited stray must go")
 	}
 }
 
 func TestScopeHashIsStableAndShort(t *testing.T) {
 	if org.Hash() != org.Hash() || len(org.Hash()) != 6 || org.Hash() == repo.Hash() {
 		t.Errorf("hash %q %q", org.Hash(), repo.Hash())
+	}
+}
+
+func TestARunnerThatIsOfflinePastTheGraceIsDeadAndReapedWithItsRunner(t *testing.T) {
+	in := Input{
+		Queued:   map[string]int{org.Key(): 2},
+		Services: []Service{svc("rr-hung", org, 10*time.Minute), svc("rr-new", org, 30*time.Second)},
+		Runners:  map[string][]Runner{org.Key(): {{ID: 7, Name: "rr-hung", Offline: true}, {ID: 8, Name: "rr-new", Offline: true}}},
+	}
+	p := plan(in)
+	r, ok := reaped(p, "rr-hung")
+	if !ok || r.RunnerID != 7 {
+		t.Errorf("rr-hung: %+v ok=%v, want reaped with its runner: a JIT runner is registered at once and a hung container never goes online", r, ok)
+	}
+	if _, ok := reaped(p, "rr-new"); ok {
+		t.Error("an offline runner inside the startup grace is still starting")
+	}
+	if createsFor(p, org) != 1 {
+		t.Errorf("creates %+v: rr-new covers one of the two queued jobs, the hung one covers none", p.Create)
+	}
+}
+
+func TestABusyRunnerThatTurnedOfflineIsLeftToTheMaxAge(t *testing.T) {
+	in := Input{
+		Services: []Service{svc("rr-a", org, 20*time.Minute)},
+		Runners:  map[string][]Runner{org.Key(): {{ID: 1, Name: "rr-a", Busy: true, Offline: true}}},
+	}
+	if _, ok := reaped(plan(in), "rr-a"); ok {
+		t.Error("a runner mid-job is not reaped before the job timeout")
+	}
+}
+
+func TestAServiceOfAScopeNoLongerConfiguredIsKeptUntilItsJobCouldHaveEnded(t *testing.T) {
+	stray := Service{ID: "id-s", Name: "rr-s", ScopeHash: "ffffff", CreatedAt: now.Add(-30 * time.Minute)}
+	old := Service{ID: "id-o", Name: "rr-o", ScopeHash: "ffffff", CreatedAt: now.Add(-7 * time.Hour)}
+	p := plan(Input{Services: []Service{stray, old}})
+	if _, ok := reaped(p, "rr-s"); ok {
+		t.Error("a service of a removed scope may be mid-job: it goes only past the job timeout")
+	}
+	if _, ok := reaped(p, "rr-o"); !ok {
+		t.Error("past the job timeout it goes")
 	}
 }

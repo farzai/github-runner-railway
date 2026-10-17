@@ -51,7 +51,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", webhook.Handler(cfg.WebhookSecret, cfg.Label, func(e webhook.Event) {
 		log.Info("workflow_job", "action", e.Action, "repo", e.Repo)
-		c.Nudge()
+		c.OnEvent(e)
 	}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		st := c.Status()

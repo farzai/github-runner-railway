@@ -44,6 +44,8 @@ func New(cfg Config) *Client {
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
+	// the token must go only where it was pointed: never follow a redirect
+	cfg.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Client{cfg: cfg}
 }
 

@@ -123,3 +123,15 @@ func TestAnErrorNeverEchoesTheToken(t *testing.T) {
 		t.Errorf("err %v", err)
 	}
 }
+
+func TestARedirectIsNotFollowedAndTheTokenGoesNowhereElse(t *testing.T) {
+	hits := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer other.Close()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }))
+	defer ts.Close()
+	c := New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Prefix: "rr-"})
+	if _, err := c.List(context.Background()); err == nil || hits != 0 {
+		t.Errorf("err %v hits %d: the Project-Access-Token must not follow a redirect", err, hits)
+	}
+}

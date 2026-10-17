@@ -10,6 +10,7 @@ import (
 
 	"github.com/farzai/github-runner-railway/internal/ghapp"
 	"github.com/farzai/github-runner-railway/internal/reconcile"
+	"github.com/farzai/github-runner-railway/internal/webhook"
 )
 
 var (
@@ -195,5 +196,39 @@ func TestNudgeWakesTheLoopAndManyNudgesCollapse(t *testing.T) {
 	case <-c.wake:
 		t.Error("nudges must collapse into one wake-up")
 	default:
+	}
+}
+
+func TestOnlyAQueuedEventWakesTheLoop(t *testing.T) {
+	c := newC(&fakeGH{}, &fakeRW{})
+	for _, action := range []string{"in_progress", "completed", "waiting"} {
+		c.OnEvent(webhook.Event{Action: action})
+	}
+	select {
+	case <-c.wake:
+		t.Error("a non-queued event woke a full scan: with many repositories each scan costs dozens of API calls")
+	default:
+	}
+	c.OnEvent(webhook.Event{Action: "queued"})
+	select {
+	case <-c.wake:
+	default:
+		t.Error("a queued event must wake the loop")
+	}
+}
+
+func TestAnUnreadableScopeKeepsItsAlertMarksSoAlertsDoNotRepeat(t *testing.T) {
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "farzai/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
+	rw := &fakeRW{createErr: errors.New("railway down")}
+	var alerts []string
+	c := newC(gh, rw)
+	c.cfg.Alert = func(msg string) { alerts = append(alerts, msg) }
+	_ = c.Cycle(context.Background())
+	gh.jobsErr = map[string]error{org.Key(): errors.New("github 502")}
+	_ = c.Cycle(context.Background())
+	gh.jobsErr = nil
+	_ = c.Cycle(context.Background())
+	if len(alerts) != 1 {
+		t.Errorf("alerts %v, want one: a cycle that could not read GitHub must not forget what it already alerted", alerts)
 	}
 }

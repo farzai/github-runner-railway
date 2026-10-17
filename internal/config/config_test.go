@@ -13,6 +13,7 @@ func base() map[string]string {
 		"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "KEY-SECRET", "GITHUB_WEBHOOK_SECRET": "WH-SECRET",
 		"RAILWAY_API_TOKEN": "RW-SECRET", "RAILWAY_PROJECT_ID": "p", "RAILWAY_ENVIRONMENT_ID": "e",
 		"RUNNER_IMAGE": "ghcr.io/farzai/github-runner-railway:1", "RUNNER_SCOPES": "org:farzai, repo:parsilver/skyabove",
+		"RUNNER_GROUP_ID": "7",
 	}
 }
 
@@ -68,5 +69,27 @@ func TestNoErrorOrStringEverCarriesASecret(t *testing.T) {
 				t.Errorf("%q leaks %s", s, secret)
 			}
 		}
+	}
+}
+
+func TestAnOrgScopeNeedsAnExplicitNonDefaultRunnerGroup(t *testing.T) {
+	m := base()
+	delete(m, "RUNNER_GROUP_ID")
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "RUNNER_GROUP_ID") {
+		t.Errorf("an org scope with no group: err %v", err)
+	}
+	m["RUNNER_GROUP_ID"] = "1"
+	if _, err := Load(env(m)); err == nil {
+		t.Error("the Default group (1) accepted: a dedicated group is required")
+	}
+	m["RUNNER_GROUP_ID"] = "7"
+	if c, err := Load(env(m)); err != nil || c.RunnerGroupID != 7 {
+		t.Errorf("group 7: %v %+v", err, c)
+	}
+	m = base()
+	delete(m, "RUNNER_GROUP_ID")
+	m["RUNNER_SCOPES"] = "repo:parsilver/skyabove"
+	if _, err := Load(env(m)); err != nil {
+		t.Errorf("repo scopes use the default group by necessity and need none: %v", err)
 	}
 }

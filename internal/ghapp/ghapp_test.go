@@ -259,3 +259,106 @@ func verifyRS256(pub *rsa.PublicKey, signed string, sig []byte) error {
 	h := sha256.Sum256([]byte(signed))
 	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, h[:], sig)
 }
+
+func TestRunnersCarryTheirOnlineStatus(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"runners":[{"id":1,"name":"a","status":"offline","busy":false},{"id":2,"name":"b","status":"online","busy":false}]}`)
+	}}
+	rs, err := newGH(t, f).Runners(context.Background(), org)
+	if err != nil || len(rs) != 2 || !rs[0].Offline || rs[1].Offline {
+		t.Errorf("runners %+v err %v", rs, err)
+	}
+}
+
+func TestOnlyJobsOurRunnerCanTakeAreCounted(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "queued":
+			io.WriteString(w, `{"workflow_runs":[{"id":11}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
+			io.WriteString(w, `{"workflow_runs":[]}`)
+		default:
+			io.WriteString(w, `{"jobs":[
+			 {"id":1,"status":"queued","labels":["self-hosted","Railway-Farzai"]},
+			 {"id":2,"status":"queued","labels":["self-hosted","railway-farzai","linux","x64"]},
+			 {"id":3,"status":"queued","labels":["self-hosted","railway-farzai","gpu"]},
+			 {"id":4,"status":"queued","labels":["railway-farzai","ubuntu-latest"]}]}`)
+		}
+	}}
+	jobs, err := newGH(t, f).QueuedJobs(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[0].ID != 1 || jobs[1].ID != 2 {
+		t.Errorf("jobs %+v, want 1 and 2: a job that also wants gpu would pin an idle runner it can never use; labels compare without case", jobs)
+	}
+}
+
+func TestRunsAndJobsAreReadAcrossPagesAndTooManyPagesIsAnError(t *testing.T) {
+	var base string
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "queued":
+			if page == "" {
+				w.Header().Set("Link", `<`+base+r.URL.Path+`?status=queued&per_page=100&page=2>; rel="next"`)
+				io.WriteString(w, `{"workflow_runs":[{"id":11}]}`)
+				return
+			}
+			io.WriteString(w, `{"workflow_runs":[{"id":12}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
+			io.WriteString(w, `{"workflow_runs":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/runs/11/jobs"):
+			if page == "" {
+				w.Header().Set("Link", `<`+base+r.URL.Path+`?filter=latest&per_page=100&page=2>; rel="next"`)
+				io.WriteString(w, `{"jobs":[{"id":1,"status":"queued","labels":["railway-farzai"]}]}`)
+				return
+			}
+			io.WriteString(w, `{"jobs":[{"id":2,"status":"queued","labels":["railway-farzai"]}]}`)
+		default:
+			io.WriteString(w, `{"jobs":[{"id":3,"status":"queued","labels":["railway-farzai"]}]}`)
+		}
+	}}
+	c := newGH(t, f)
+	base = c.cfg.BaseURL
+	jobs, err := c.QueuedJobs(context.Background(), repo)
+	if err != nil || len(jobs) != 3 {
+		t.Fatalf("jobs %+v err %v, want all three jobs of both pages of runs and jobs", jobs, err)
+	}
+
+	endless := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+base+r.URL.Path+`?page=2>; rel="next"`)
+		io.WriteString(w, `{"runners":[]}`)
+	}}
+	c2 := newGH(t, endless)
+	base = c2.cfg.BaseURL
+	if _, err := c2.Runners(context.Background(), org); err == nil {
+		t.Error("an endless listing must be an error, not a silently short answer")
+	}
+}
+
+func TestALinkToAnotherSchemeOrHostIsNotFollowed(t *testing.T) {
+	var calls int
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Link", `<https://`+r.Host+r.URL.Path+`?page=2>; rel="next"`) // https against an http test server
+		io.WriteString(w, `{"runners":[{"id":1,"name":"a"}]}`)
+	}}
+	rs, err := newGH(t, f).Runners(context.Background(), org)
+	if err != nil || len(rs) != 1 || calls != 1 {
+		t.Errorf("runners %+v err %v calls %d: a next link on another scheme must not be followed", rs, err, calls)
+	}
+}
+
+func TestRedirectsAreNeverFollowedSoNoCredentialTravelsWithOne(t *testing.T) {
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer target.Close()
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/x", http.StatusFound)
+	}}
+	_, err := newGH(t, f).Runners(context.Background(), org)
+	if err == nil || hits != 0 {
+		t.Errorf("err %v hits %d: the redirect must not be followed", err, hits)
+	}
+}
