@@ -24,24 +24,25 @@ see under it is private; prefer listing repositories.
 | **Runner Controller** (`daf3516f-92d3-452f-a151-d852ffbeb228`, production `c62b5a0c-d534-4b43-b21d-b0e53f1179b5`) | one controller service per pool | its own project token, used to deploy the controllers |
 | the pool's runner project | nothing but the one-job runner services its controller creates and deletes | that project's token, set on its controller as `RUNNER_RAILWAY_TOKEN` |
 
-## Decision: one App, two pools, and what runs first
+## Decision: two Apps, two plain controllers, and what runs first
 
-The GitHub App `farzai-railway-runner` (App ID 5355265) is installed on farzai and parsilver for all
-repositories and has one webhook URL, `https://controller-production-0620.up.railway.app/webhook`. One URL
-means one process receives every event, so the split between the public and the private pool cannot be
-two controllers behind two webhooks: it has to be **inside one controller process, by label** (each pool
-its own label, runner project, runner group and scopes, the controller starting one reconcile loop per
-pool and routing each event to the pool whose label the job asked for). That multi-pool controller is not
-built yet. Until it is:
+The GitHub App `farzai-railway-runner` (App ID 5355265) has one webhook URL, so it can feed only one
+controller. Splitting public from private therefore takes **one App per pool, each with its own webhook
+and its own controller** (step 1 below): two plain single-pool controllers are less code than a multi-pool
+one and a leaked App key reaches only its own pool. A multi-pool controller is not needed.
 
-- **Phase 1 (now): the pilot runs a single pool.** `parsilver/skyabove` is private and only private
-  repositories use the pool, in the `railway` runner group (id 3, "all repositories", public repositories
-  allowed). No public repository is switched while the pool is shared, because a job from a public
-  repository would share a Railway environment and private network with a private job
-  (SECURITY.md).
-- **Phase 2 (before any public repository moves): build the multi-pool controller**, create a **Runner
-  Private** project and a private-only runner group, and move the private repositories to it; the shared
-  `Runner Public` project and group `railway` then serve public repositories only.
+- **Phase 1 (now): the pilot runs a single private pool.** `parsilver/skyabove` is private and only
+  private repositories use the pool, with `RUNNER_LABEL=railway-private`. A repository scope (`repo:...`)
+  makes repository-scoped JIT runners, so `RUNNER_GROUP_ID` is not used for it (it matters only for an
+  org scope). List private repositories one by one; no org scope. Before deploying, set the App's
+  installations on farzai and parsilver to **selected repositories** (the pilot repository only), because
+  it holds Administration write. Run it in a **Runner Private** project from the start, to avoid a move
+  later. No public repository is switched while the pool is shared, because a job from a public
+  repository would share a Railway environment and private network with a private job (SECURITY.md).
+- **Phase 2 (before any public repository moves): a second App and a second controller** for the public
+  pool (`Runner Public`, label `railway-public`), with a runner group that allows public repositories and
+  its own project and token. Keep the shared group `railway` (id 3, "all repositories", public allowed)
+  unused or restricted until then: with an org scope it would expose the private pool to public repos.
 
 ## Before a controller can start (owner)
 
