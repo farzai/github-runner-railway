@@ -1,6 +1,6 @@
 # Railway spike (2026-10-17)
 
-Measured against project "Runner Public" with a project token, one throwaway `alpine:3.20` service.
+Measured against a runner project with a project token, one throwaway `alpine:3.20` service.
 
 | Question | Result |
 | --- | --- |

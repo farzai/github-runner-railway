@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	org  = reconcile.Scope{Kind: "org", Owner: "farzai"}
-	repo = reconcile.Scope{Kind: "repo", Owner: "parsilver", Repo: "skyabove"}
+	org  = reconcile.Scope{Kind: "org", Owner: "acme"}
+	repo = reconcile.Scope{Kind: "repo", Owner: "acme", Repo: "app"}
 	now  = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 )
 
@@ -86,7 +86,7 @@ func newC(gh *fakeGH, rw *fakeRW) *Controller {
 }
 
 func TestACycleCreatesARunnerServiceWithItsJITConfigForEachQueuedJob(t *testing.T) {
-	gh := &fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "parsilver/skyabove", CreatedAt: now}, {ID: 2, Repo: "parsilver/skyabove", CreatedAt: now}}}}
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "acme/app", CreatedAt: now}, {ID: 2, Repo: "acme/app", CreatedAt: now}}}}
 	rw := &fakeRW{}
 	if err := newC(gh, rw).Cycle(context.Background()); err != nil {
 		t.Fatal(err)
@@ -158,20 +158,20 @@ func TestAReapDeletesTheRunnerFirstAndSkipsTheServiceWhenTheRunnerIsBusy(t *test
 }
 
 func TestAJobQueuedTooLongWithoutARunnerRaisesOneAlert(t *testing.T) {
-	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "farzai/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "acme/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
 	rw := &fakeRW{createErr: errors.New("railway down")}
 	var alerts []string
 	c := newC(gh, rw)
 	c.cfg.Alert = func(msg string) { alerts = append(alerts, msg) }
 	_ = c.Cycle(context.Background())
 	_ = c.Cycle(context.Background())
-	if len(alerts) != 1 || !strings.Contains(alerts[0], "farzai/a") {
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "acme/a") {
 		t.Errorf("alerts %v, want exactly one naming the repository", alerts)
 	}
 }
 
 func TestNoAlertWhileARunnerIsComing(t *testing.T) {
-	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "farzai/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "acme/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
 	rw := &fakeRW{services: []reconcile.Service{{ID: "s", Name: "rr-" + org.Hash() + "-a", ScopeHash: org.Hash(), CreatedAt: now.Add(-30 * time.Second)}}}
 	var alerts []string
 	c := newC(gh, rw)
@@ -218,7 +218,7 @@ func TestOnlyAQueuedEventWakesTheLoop(t *testing.T) {
 }
 
 func TestAnUnreadableScopeKeepsItsAlertMarksSoAlertsDoNotRepeat(t *testing.T) {
-	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "farzai/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{org.Key(): {{ID: 9, Repo: "acme/a", CreatedAt: now.Add(-10 * time.Minute)}}}}
 	rw := &fakeRW{createErr: errors.New("railway down")}
 	var alerts []string
 	c := newC(gh, rw)

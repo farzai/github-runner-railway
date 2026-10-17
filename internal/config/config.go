@@ -95,7 +95,7 @@ func Load(get func(string) string) (Config, error) {
 		}
 		return n
 	}
-	c.Label = str("RUNNER_LABEL", "railway-farzai")
+	c.Label = str("RUNNER_LABEL", "railway")
 	c.ServicePrefix = str("RUNNER_SERVICE_PREFIX", "rr-")
 	c.Port = str("PORT", "8080")
 	c.AlertURL = strings.TrimSpace(get("ALERT_WEBHOOK_URL"))

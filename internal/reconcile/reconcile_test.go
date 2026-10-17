@@ -8,8 +8,8 @@ import (
 var now = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 
 var (
-	org  = Scope{Kind: "org", Owner: "farzai"}
-	repo = Scope{Kind: "repo", Owner: "parsilver", Repo: "skyabove"}
+	org  = Scope{Kind: "org", Owner: "acme"}
+	repo = Scope{Kind: "repo", Owner: "acme", Repo: "app"}
 )
 
 func params() Params {

@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 permissions:
   contents: read
 jobs:
@@ -15,14 +16,40 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
-  image:
+
+  # Every push to main publishes the three images under the commit sha; a vX.Y.Z tag publishes the
+  # same builds under the version as well (runner :vX.Y.Z, Postgres variant :pg-vX.Y.Z, controller
+  # :vX.Y.Z). Images are named after the repository, so a fork publishes its own.
+  images:
     runs-on: ubuntu-latest
     needs: test
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - {name: runner, context: image, target: base, image: '', prefix: ''}
+          - {name: runner-pg, context: image, target: pg, image: '', prefix: 'pg-'}
+          - {name: controller, context: ., target: '', image: '-controller', prefix: ''}
     steps:
       - uses: actions/checkout@v4
+      - id: tags
+        env:
+          REPO: ${{ github.repository }}
+          SUFFIX: ${{ matrix.image }}
+          PREFIX: ${{ matrix.prefix }}
+          SHA: ${{ github.sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          name="ghcr.io/${REPO,,}${SUFFIX}"
+          {
+            echo "tags<<EOF"
+            echo "${name}:${PREFIX}${SHA}"
+            if [ "${REF_TYPE}" = tag ]; then echo "${name}:${PREFIX}${REF_NAME}"; fi
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         if: github.event_name == 'push'
@@ -32,56 +59,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: image
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' }}
-          target: base
-          tags: |
-            ghcr.io/farzai/github-runner-railway:${{ github.sha }}
-  image-pg:
-    # The Postgres variant (PostgreSQL 18 and Playwright's system libraries) for the
-    # railway-private-pg pool.
-    runs-on: ubuntu-latest
-    needs: test
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: image
-          target: pg
-          platforms: linux/amd64
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ghcr.io/farzai/github-runner-railway:pg-${{ github.sha }}
-  controller-image:
-    runs-on: ubuntu-latest
-    needs: test
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ghcr.io/farzai/github-runner-railway-controller:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.tags }}

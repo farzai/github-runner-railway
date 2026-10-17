@@ -32,7 +32,7 @@ func server(t *testing.T, reply func(c call) string) (*Client, *[]call, *http.He
 		io.WriteString(w, reply(c))
 	}))
 	t.Cleanup(ts.Close)
-	return New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Image: "ghcr.io/farzai/runner:1", Prefix: "rr-"}), &calls, &hdr
+	return New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Image: "ghcr.io/acme/runner:1", Prefix: "rr-"}), &calls, &hdr
 }
 
 func TestListReturnsOnlyOurServicesWithTheirState(t *testing.T) {
@@ -72,7 +72,7 @@ func TestCreateMakesTheServiceWithItsConfigThenDeploysOnce(t *testing.T) {
 		t.Fatalf("%d calls, want create, configure, deploy: %+v", len(*calls), *calls)
 	}
 	in := (*calls)[0].Vars["i"].(map[string]any)
-	if in["projectId"] != "P" || in["environmentId"] != "E" || in["name"] != "rr-abc123-q" || in["source"].(map[string]any)["image"] != "ghcr.io/farzai/runner:1" {
+	if in["projectId"] != "P" || in["environmentId"] != "E" || in["name"] != "rr-abc123-q" || in["source"].(map[string]any)["image"] != "ghcr.io/acme/runner:1" {
 		t.Errorf("create input %+v", in)
 	}
 	if in["variables"].(map[string]any)["ACTIONS_RUNNER_INPUT_JITCONFIG"] != "JIT" {

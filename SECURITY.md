@@ -1,6 +1,7 @@
 # Security
 
-This fleet runs workflows of public repositories too, so every job is treated as hostile.
+This fleet is meant for **private repositories** of one owner or team. Every job is still treated as
+hostile: a dependency, a compromised account or a fork pull request can run code on a runner.
 
 ## What a job can see
 
@@ -12,24 +13,31 @@ This fleet runs workflows of public repositories too, so every job is treated as
   variables before the runner starts.
 * One container per job: nothing a job leaves behind (processes, files, caches) can reach the next job.
 
-## Rules for the owner
+## Rules for the operator
 
+* **Private repositories only.** Runner services share a Railway private network, so a job from a
+  public repository (anyone can open a pull request) could reach something a concurrent job started.
+  Keep public repositories on GitHub-hosted runners. `RUNNER_SCOPES` decides what is served: list
+  private repositories one by one, and use an `org:` scope only when every repository the App can see
+  there is private.
 * In each organization and repository that uses these runners: Settings, Actions, General, "Approval
   for running fork pull request workflows": **Require approval for all outside collaborators**.
-  Without it a stranger's pull request runs on our runners.
-* Do not put deployment secrets in workflows that run on `pull_request` from forks.
-* Use a dedicated runner group limited to selected repositories.
-* Install the GitHub App only on the repositories that need it (Administration permission is broad).
-* Keep nothing else in the runner Railway project.
-* **Separate pools for public and private repositories.** Services in one Railway environment share a
-  private network, so a hostile job from a public repository could reach something a concurrent
-  trusted job started. Run two controllers: one with `RUNNER_SCOPES` of public repositories and its own
-  `RUNNER_LABEL` (for example `railway-public`) in its own Railway project or environment, and one for
-  private repositories. Never mix them in one environment.
-* Do not use `pull_request_target` or `workflow_run` with a checkout of untrusted code on these runners.
+* Do not use `pull_request_target` or `workflow_run` with a checkout of untrusted code on these runners,
+  and keep deployment secrets out of workflows that run on `pull_request` from forks.
+* For an `org:` scope, use a dedicated runner group limited to selected repositories with "Allow public
+  repositories" off.
+* Install the GitHub App only where it is needed: Administration write is broad. Two Apps (for example
+  one per organization) limit what one leaked key reaches.
+* Keep nothing else in the runner Railway project, and run the controller in a different project.
 * Set a Railway usage limit on the runner project, so a runaway queue cannot run up a bill.
-* Prefer two GitHub Apps (one for the org, one for personal repositories): Administration write is
-  broad, and a leaked key then reaches only one side.
+* Pin the images to a version or digest.
+
+## Two pools in one runner project
+
+Two controllers (for example the plain and the Postgres image) can share the runner project: each lists
+and removes only services under its own `RUNNER_SERVICE_PREFIX`, and only takes jobs that ask for its
+label. Their runners share the private network, so both pools must serve the same trust level
+(private repositories). The Postgres helper `ci-postgres` listens on 127.0.0.1 only.
 
 ## The JIT config
 

@@ -12,7 +12,7 @@ func base() map[string]string {
 	return map[string]string{
 		"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "KEY-SECRET", "GITHUB_WEBHOOK_SECRET": "WH-SECRET",
 		"RUNNER_RAILWAY_TOKEN": "RW-SECRET", "RUNNER_RAILWAY_PROJECT_ID": "p", "RUNNER_RAILWAY_ENVIRONMENT_ID": "e",
-		"RUNNER_IMAGE": "ghcr.io/farzai/github-runner-railway:1", "RUNNER_SCOPES": "org:farzai, repo:parsilver/skyabove",
+		"RUNNER_IMAGE": "ghcr.io/acme/github-runner-railway:1", "RUNNER_SCOPES": "org:acme, repo:acme/app",
 		"RUNNER_GROUP_ID": "7",
 	}
 }
@@ -22,10 +22,10 @@ func TestLoadParsesScopesAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Scopes) != 2 || c.Scopes[0].Key() != "org:farzai" || c.Scopes[1].Key() != "repo:parsilver/skyabove" {
+	if len(c.Scopes) != 2 || c.Scopes[0].Key() != "org:acme" || c.Scopes[1].Key() != "repo:acme/app" {
 		t.Errorf("scopes %+v", c.Scopes)
 	}
-	if c.Label != "railway-farzai" || c.MaxRunners != 8 || c.Interval != 2*time.Minute || c.MaxAge != 6*time.Hour+10*time.Minute || c.Port != "8080" {
+	if c.Label != "railway" || c.MaxRunners != 8 || c.Interval != 2*time.Minute || c.MaxAge != 6*time.Hour+10*time.Minute || c.Port != "8080" {
 		t.Errorf("defaults %+v", c)
 	}
 }
@@ -39,7 +39,7 @@ func TestLoadRefusesWhatIsMissingOrMalformedAndNamesOnlyTheVariable(t *testing.T
 			t.Errorf("without %s: err %v", k, err)
 		}
 	}
-	for _, bad := range []string{"farzai", "org:", "repo:parsilver", "repo:a/b/c", "team:x"} {
+	for _, bad := range []string{"acme", "org:", "repo:acme", "repo:a/b/c", "team:x"} {
 		m := base()
 		m["RUNNER_SCOPES"] = bad
 		if _, err := Load(env(m)); err == nil {
@@ -88,7 +88,7 @@ func TestAnOrgScopeNeedsAnExplicitNonDefaultRunnerGroup(t *testing.T) {
 	}
 	m = base()
 	delete(m, "RUNNER_GROUP_ID")
-	m["RUNNER_SCOPES"] = "repo:parsilver/skyabove"
+	m["RUNNER_SCOPES"] = "repo:acme/app"
 	if _, err := Load(env(m)); err != nil {
 		t.Errorf("repo scopes use the default group by necessity and need none: %v", err)
 	}

@@ -17,7 +17,7 @@ type Scope struct {
 	Repo  string
 }
 
-// Key is the scope as written in configuration: org:farzai or repo:parsilver/skyabove.
+// Key is the scope as written in configuration: org:acme or repo:acme/app.
 func (s Scope) Key() string {
 	if s.Kind == "org" {
 		return "org:" + s.Owner

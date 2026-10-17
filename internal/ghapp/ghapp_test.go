@@ -58,15 +58,15 @@ func newGH(t *testing.T, f *fake) *Client {
 		}
 	}))
 	t.Cleanup(ts.Close)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway-farzai", RunnerGroupID: 7})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway", RunnerGroupID: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
 }
 
-var org = reconcile.Scope{Kind: "org", Owner: "farzai"}
-var repo = reconcile.Scope{Kind: "repo", Owner: "parsilver", Repo: "skyabove"}
+var org = reconcile.Scope{Kind: "org", Owner: "acme"}
+var repo = reconcile.Scope{Kind: "repo", Owner: "acme", Repo: "app"}
 
 func TestAppJWTIsSignedWithTheKeyAndShortLived(t *testing.T) {
 	pemKey, key := testKey(t)
@@ -127,7 +127,7 @@ func TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken(t *testin
 		t.Fatalf("enc %q id %d err %v", enc, id, err)
 	}
 	last := len(f.reqs) - 1
-	if f.reqs[last] != "POST /orgs/farzai/actions/runners/generate-jitconfig" || f.auths[last] != "Bearer inst-tok" {
+	if f.reqs[last] != "POST /orgs/acme/actions/runners/generate-jitconfig" || f.auths[last] != "Bearer inst-tok" {
 		t.Errorf("request %q auth %q", f.reqs[last], f.auths[last])
 	}
 	var body struct {
@@ -136,7 +136,7 @@ func TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken(t *testin
 		Labels        []string `json:"labels"`
 	}
 	json.Unmarshal([]byte(f.bodies[last]), &body)
-	if body.Name != "rr-abc-1" || body.RunnerGroupID != 7 || strings.Join(body.Labels, ",") != "self-hosted,linux,x64,railway-farzai" {
+	if body.Name != "rr-abc-1" || body.RunnerGroupID != 7 || strings.Join(body.Labels, ",") != "self-hosted,linux,x64,railway" {
 		t.Errorf("body %+v", body)
 	}
 }
@@ -148,7 +148,7 @@ func TestJITConfigForARepoUsesTheRepoEndpointAndTheDefaultGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := len(f.reqs) - 1
-	if f.reqs[last] != "POST /repos/parsilver/skyabove/actions/runners/generate-jitconfig" {
+	if f.reqs[last] != "POST /repos/acme/app/actions/runners/generate-jitconfig" {
 		t.Errorf("request %q", f.reqs[last])
 	}
 	if !strings.Contains(f.bodies[last], `"runner_group_id":1`) {
@@ -206,15 +206,15 @@ func TestQueuedJobsCountOnlyQueuedJobsWithOurLabelInTheScopesRepos(t *testing.T)
 	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/installation/repositories":
-			io.WriteString(w, `{"total_count":2,"repositories":[{"name":"a","owner":{"login":"farzai"}},{"name":"other","owner":{"login":"someone"}}]}`)
+			io.WriteString(w, `{"total_count":2,"repositories":[{"name":"a","owner":{"login":"acme"}},{"name":"other","owner":{"login":"someone"}}]}`)
 		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "queued":
 			io.WriteString(w, `{"workflow_runs":[{"id":11}]}`)
 		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
 			io.WriteString(w, `{"workflow_runs":[{"id":12}]}`)
 		case strings.HasSuffix(r.URL.Path, "/runs/11/jobs"):
-			io.WriteString(w, `{"jobs":[{"id":1,"status":"queued","labels":["self-hosted","railway-farzai"],"created_at":"2026-10-17T11:00:00Z"},{"id":2,"status":"queued","labels":["ubuntu-latest"]},{"id":3,"status":"in_progress","labels":["railway-farzai"]}]}`)
+			io.WriteString(w, `{"jobs":[{"id":1,"status":"queued","labels":["self-hosted","railway"],"created_at":"2026-10-17T11:00:00Z"},{"id":2,"status":"queued","labels":["ubuntu-latest"]},{"id":3,"status":"in_progress","labels":["railway"]}]}`)
 		case strings.HasSuffix(r.URL.Path, "/runs/12/jobs"):
-			io.WriteString(w, `{"jobs":[{"id":4,"status":"queued","labels":["railway-farzai"],"created_at":"2026-10-17T11:02:00Z"}]}`)
+			io.WriteString(w, `{"jobs":[{"id":4,"status":"queued","labels":["railway"],"created_at":"2026-10-17T11:02:00Z"}]}`)
 		default:
 			t.Errorf("unexpected %s", r.URL.RequestURI())
 			w.WriteHeader(404)
@@ -225,8 +225,8 @@ func TestQueuedJobsCountOnlyQueuedJobsWithOurLabelInTheScopesRepos(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 2 || jobs[0].ID != 1 || jobs[1].ID != 4 || jobs[0].Repo != "farzai/a" {
-		t.Errorf("jobs %+v, want jobs 1 and 4 of farzai/a only", jobs)
+	if len(jobs) != 2 || jobs[0].ID != 1 || jobs[1].ID != 4 || jobs[0].Repo != "acme/a" {
+		t.Errorf("jobs %+v, want jobs 1 and 4 of acme/a only", jobs)
 	}
 	for _, r := range f.reqs {
 		if strings.Contains(r, "someone") {
@@ -279,10 +279,10 @@ func TestOnlyJobsOurRunnerCanTakeAreCounted(t *testing.T) {
 			io.WriteString(w, `{"workflow_runs":[]}`)
 		default:
 			io.WriteString(w, `{"jobs":[
-			 {"id":1,"status":"queued","labels":["self-hosted","Railway-Farzai"]},
-			 {"id":2,"status":"queued","labels":["self-hosted","railway-farzai","linux","x64"]},
-			 {"id":3,"status":"queued","labels":["self-hosted","railway-farzai","gpu"]},
-			 {"id":4,"status":"queued","labels":["railway-farzai","ubuntu-latest"]}]}`)
+			 {"id":1,"status":"queued","labels":["self-hosted","RAILWAY"]},
+			 {"id":2,"status":"queued","labels":["self-hosted","railway","linux","x64"]},
+			 {"id":3,"status":"queued","labels":["self-hosted","railway","gpu"]},
+			 {"id":4,"status":"queued","labels":["railway","ubuntu-latest"]}]}`)
 		}
 	}}
 	jobs, err := newGH(t, f).QueuedJobs(context.Background(), repo)
@@ -311,12 +311,12 @@ func TestRunsAndJobsAreReadAcrossPagesAndTooManyPagesIsAnError(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/runs/11/jobs"):
 			if page == "" {
 				w.Header().Set("Link", `<`+base+r.URL.Path+`?filter=latest&per_page=100&page=2>; rel="next"`)
-				io.WriteString(w, `{"jobs":[{"id":1,"status":"queued","labels":["railway-farzai"]}]}`)
+				io.WriteString(w, `{"jobs":[{"id":1,"status":"queued","labels":["railway"]}]}`)
 				return
 			}
-			io.WriteString(w, `{"jobs":[{"id":2,"status":"queued","labels":["railway-farzai"]}]}`)
+			io.WriteString(w, `{"jobs":[{"id":2,"status":"queued","labels":["railway"]}]}`)
 		default:
-			io.WriteString(w, `{"jobs":[{"id":3,"status":"queued","labels":["railway-farzai"]}]}`)
+			io.WriteString(w, `{"jobs":[{"id":3,"status":"queued","labels":["railway"]}]}`)
 		}
 	}}
 	c := newGH(t, f)

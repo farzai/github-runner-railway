@@ -1,9 +1,9 @@
 # github-runner-railway
 
-Autoscaling self-hosted GitHub Actions runners on [Railway](https://railway.com): **one short-lived
-Railway service per job**. A controller watches GitHub for jobs labelled `railway-farzai`, registers
-a one-job (JIT) runner for each, starts it as its own Railway service, and deletes the service when
-the job is over. Nothing is shared between two jobs.
+Autoscaling, ephemeral self-hosted GitHub Actions runners on [Railway](https://railway.com):
+**one short-lived Railway service per job**. A small controller watches GitHub for queued jobs with
+your label, registers a one-job (JIT) runner for each, starts it as its own Railway service, and
+deletes the service when the job is over. Nothing is shared between two jobs.
 
 ```
 GitHub App webhook (workflow_job)  -->  controller  -->  Railway API
@@ -13,18 +13,20 @@ GitHub App webhook (workflow_job)  -->  controller  -->  Railway API
                                         GitHub          run.sh --jitconfig  ->  one job  ->  exit
 ```
 
-## Why one service per job
+It is meant for **private repositories** of one owner or team. Read [Limits](#limits) and
+[SECURITY.md](SECURITY.md) before you point it at anything else.
 
-* **Isolation.** A runner container that outlives a job can be left with background processes or
-  edited files by a fork PR's job and hand them to the next job. A fresh container per job cannot.
-* **Safe scale-down.** Railway cannot choose which replica of a service to stop, so scaling a pool
-  down can kill a busy runner. Here the controller deletes exactly the service it picked, and only
-  after GitHub agreed the runner is idle (GitHub refuses to delete a busy runner).
-* **No restart burn.** Services are created with `restartPolicyType = NEVER`.
-* **Personal accounts.** A personal account has no org runners or runner groups; its repositories
-  need repo-scoped JIT configs, which only a per-job creation can serve.
+## How it works
 
-## Parts
+* **One service per job.** A fresh container per job, so nothing a job leaves behind (processes,
+  files, caches) reaches the next one.
+* **Safe scale-down.** The controller deletes exactly the service it picked, and only after GitHub
+  agreed the runner is idle (GitHub refuses to delete a busy runner). Services never restart.
+* **Org and personal repositories.** `org:<name>` scopes get org runners in a dedicated runner group;
+  `repo:<owner>/<name>` scopes get repository-scoped runners, which is what personal accounts need.
+* **Webhook plus poll.** The webhook only wakes the controller; every `POLL_SECONDS` it reads GitHub
+  and Railway afresh and reconciles: create a runner for every queued job no runner is coming for,
+  remove finished, idle-surplus or overdue services.
 
 | Path | What |
 | --- | --- |
@@ -32,69 +34,203 @@ GitHub App webhook (workflow_job)  -->  controller  -->  Railway API
 | `internal/reconcile` | the pure planner: what to create and what to remove |
 | `internal/ghapp` | GitHub App auth, queued jobs, runners, JIT configs (standard library only) |
 | `internal/railway` | create, list and delete runner services |
-| `internal/webhook` | HMAC-verified `workflow_job` receiver; only nudges, the poll is the truth |
-| `image/` | the runner image |
+| `internal/webhook` | HMAC-verified `workflow_job` receiver |
+| `image/` | the runner image (`base`) and its Postgres + Playwright variant (`pg`) |
 
-The webhook is only a nudge. GitHub does not redeliver a missed event, so the controller also polls
-GitHub and Railway every `POLL_SECONDS` and reconciles what it sees: it creates a runner service for
-every queued job no runner is coming for, and removes dead, idle-surplus or overdue services.
+## Quick start
 
-## GitHub App
+You need a GitHub organization or account you administer, a Railway account (a plan with enough
+CPU and memory for your jobs; usage is billed), and the repositories you want to serve.
 
-Permissions: repository **Administration: Read and write**, **Actions: Read**, **Metadata: Read**;
-organization **Self-hosted runners: Read and write**. Subscribe to **Workflow job**. Install it on the
-org and on the personal repositories you serve (selected repositories only, since Administration is
-broad). Under the org: Settings, Actions, Runner groups: use a dedicated group limited to selected
-repositories, and leave "Allow public repositories" off: the fleet serves private repositories only.
+### 1. Two Railway projects
 
-## Configuration (controller variables)
+* **Controller project**: one service, the controller. It holds the GitHub App key and the Railway
+  token.
+* **Runner project**: nothing but the runner services the controller creates and deletes.
+
+They are separate because services in one Railway environment share a private network: a job must
+not be able to reach the controller. In the runner project create a **project token** (Project
+Settings, Tokens) and note the project id and environment id.
+
+### 2. The GitHub App
+
+Create it by hand with exactly the settings below, or from the manifest in
+[`docs/github-app-manifest.json`](docs/github-app-manifest.json) with GitHub's
+[app manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest):
+
+1. Edit the manifest: a unique `name`, your controller's webhook URL in `hook_attributes.url`, and a
+   `redirect_url` you control. If you serve only `repo:` scopes, delete
+   `organization_self_hosted_runners`.
+2. Submit it as the `manifest` field of an HTML form POST to
+   `https://github.com/settings/apps/new` (personal account) or
+   `https://github.com/organizations/<org>/settings/apps/new`, and confirm on GitHub.
+3. GitHub redirects to `redirect_url?code=<code>`. Within an hour, exchange the code:
+   `curl -X POST https://api.github.com/app-manifests/<code>/conversions`. The answer holds the App
+   `id`, the private key (`pem`) and the `webhook_secret`: put them straight into the controller's
+   variables and do not keep them anywhere else.
+
+The settings:
+
+* Repository permissions: **Administration: Read and write** (to create and delete repository
+  runners), **Actions: Read**, **Metadata: Read**.
+* Organization permissions: **Self-hosted runners: Read and write** (only for `org:` scopes; leave it
+  out if you serve only `repo:` scopes).
+* Subscribe to the **Workflow job** event. Webhook URL: `https://<controller domain>/webhook`, with a
+  webhook secret you generate.
+
+Generate a private key, then install the App on the repositories (or organization) you serve.
+Administration write is broad: install it on the repositories you serve when you can.
+
+For an `org:` scope, create a dedicated runner group (Settings, Actions, Runner groups) limited to
+the repositories you serve, with "Allow public repositories" off, and note its id.
+
+### 3. Deploy the controller
+
+In the controller project, add a service from the image
+`ghcr.io/farzai/github-runner-railway-controller:<version>` (see [Versions](#versions)), give it a
+public domain, port `8080`, healthcheck path `/healthz`, and the variables below. Put the domain into
+the App's webhook URL.
+
+```
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\n...
+GITHUB_WEBHOOK_SECRET=<the App's webhook secret>
+RUNNER_RAILWAY_TOKEN=<runner project token>
+RUNNER_RAILWAY_PROJECT_ID=<runner project id>
+RUNNER_RAILWAY_ENVIRONMENT_ID=<runner environment id>
+RUNNER_IMAGE=ghcr.io/farzai/github-runner-railway:<version>
+RUNNER_SCOPES=repo:acme/app,repo:acme/api
+RUNNER_LABEL=railway
+MAX_RUNNERS=2
+```
+
+`/healthz` answers 200 once a cycle has completed. The log line `controller up` shows the scopes,
+label, prefix, image and limits it runs with.
+
+### 4. Use it in a workflow
+
+```yaml
+jobs:
+  test:
+    runs-on: [self-hosted, railway]
+```
+
+Always name your label: the runners also carry `self-hosted`, `linux` and `x64`, and a job that asks
+for a label the runners do not have is not served. If you lint workflows with actionlint, declare the
+label in `.github/actionlint.yaml`:
+
+```yaml
+self-hosted-runner:
+  labels:
+    - railway
+```
+
+Start with one repository and `MAX_RUNNERS=1`, watch a job go through, then add scopes and raise the
+limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollback.
+
+## Configuration
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (PEM may keep `\n` escaped) | required |
-| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project (not `RAILWAY_*`: Railway injects those for the controller's own project) | required |
-| `RUNNER_IMAGE` | the runner image, pinned: `ghcr.io/farzai/github-runner-railway:<commit sha>` (CI publishes only sha tags) | required |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (the PEM may keep `\n` escaped) | required |
+| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | a project token, project and environment of the **runner** project (not `RAILWAY_*`: Railway injects those for the controller's own project, and the controller refuses to manage the project it runs in) | required |
+| `RUNNER_IMAGE` | the runner image, pinned to a version or digest | required |
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
-| `RUNNER_LABEL` | the `runs-on` label | `railway-farzai` |
-| `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller sharing the runner project needs its own (two characters and a dash, e.g. `rp-`) | `rr-` |
-| `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an org scope and the Default group (1) is refused | none |
-| `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | cap of services in all / created in a cycle | `8` / `4` |
+| `RUNNER_LABEL` | the `runs-on` label of this controller's runners | `railway` |
+| `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller in the same runner project needs its own (a letter, a letter or digit, a dash, e.g. `rp-`) | `rr-` |
+| `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an `org:` scope, and the Default group (1) is refused | none |
+| `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | services in all / created in one cycle | `8` / `4` |
 | `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner, at least 20 s after the last) | `120` |
-| `STARTUP_GRACE_SECONDS` / `IDLE_TTL_SECONDS` | time to register / keep a surplus idle runner | `300` / `120` |
+| `STARTUP_GRACE_SECONDS` | how long a registered runner may stay offline before its service is removed | `300` |
+| `IDLE_TTL_SECONDS` | how long a surplus idle runner is kept | `120` |
 | `MAX_JOB_MINUTES` | job timeout; a service older than this plus 10 minutes is removed | `360` |
-| `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | alert when a job waits this long with no runner coming | `5` / none |
+| `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | log an alert (and POST `{"text": ...}` to the URL) when a job waits this long with no runner coming | `5` / none |
 | `PORT` | HTTP port | `8080` |
 
-Use it in a workflow with `runs-on: [self-hosted, railway-farzai]` (always name the railway label, since the runners also carry `self-hosted`, `linux` and `x64`). A job that asks for any other label is not served and is not counted as demand.
+## The runner images
 
-## Limits worth knowing
+| Image | Contents |
+| --- | --- |
+| `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck; no `sudo`, no Docker |
+| `ghcr.io/farzai/github-runner-railway:pg-<version>` | the above plus PostgreSQL 18, Playwright's Chromium/WebKit system libraries and browsers (see `image/Dockerfile` for the pinned versions), and `ci-postgres` |
 
-* **Railway API:** 1,000 requests an hour per token. A job costs four calls (create, configure,
-  deploy, delete) and each cycle one list call, so about 230 jobs an hour at the default poll.
-* **GitHub API:** an installation has 5,000 requests an hour; each cycle reads, per repository of an
-  org scope, the queued and in-progress runs and their jobs. Prefer `repo:` scopes for large orgs.
-* **No docker** in the runner (a Railway container has no daemon): jobs that need `docker build`,
-  service containers or `container:` cannot run here. Use `ubuntu-latest` for those.
-* **No sudo** in the image, so `sudo apt-get install` fails; use `setup-*` actions or tools in the image.
-* **pids and cores:** each container caps processes at about 1,000 and `nproc` shows the host's cores,
-  not the container's: pass an explicit `-j` to compilers.
-* **Runner health:** a JIT runner is registered the moment it is made and shows offline until its container connects; one still offline after `STARTUP_GRACE_SECONDS` is treated as hung and removed with its service.
-* **Cold start** is the Railway deploy plus the image pull; see `docs/spike.md` for measurements.
+To serve both, run a **second controller** with `RUNNER_LABEL=railway-pg`, `RUNNER_SERVICE_PREFIX=rp-`
+and the `pg-` image, in the same runner project. Each controller lists and removes only its own
+services and only takes jobs that ask for its label. A GitHub App has one webhook URL, so the second
+controller works on polling alone (set `POLL_SECONDS=60`).
 
-## Security model
+In a job on the `pg` image, start a throwaway database inside the job's own container:
 
-See [SECURITY.md](SECURITY.md). In short: ephemeral JIT runners that take one job; the runner service
-holds only its own JIT config; the controller (which holds the App key and the Railway token) runs in
-a **different Railway project** from the runners; fork-PR workflows must require approval.
+```yaml
+runs-on: [self-hosted, railway-pg]
+steps:
+  - run: ci-postgres start app secret app_test   # user, password, database
+  - run: npm test                                 # CI_POSTGRES_URL is set from here on
+```
 
-## Deploying
+`ci-postgres` runs initdb as the runner user, listens on 127.0.0.1 only on a free port with fsync
+off, masks the password, and writes `CI_POSTGRES_URL`, `CI_POSTGRES_PORT` and `CI_POSTGRES_DATA` to
+`$GITHUB_ENV`. The server ends with the container.
 
-See [docs/deploy.md](docs/deploy.md): two Railway projects, the owner's one-time steps, the controller's
-variables, rollout and rollback.
+You can also build your own image from `image/Dockerfile` (keep the `entrypoint.sh` contract: read
+`ACTIONS_RUNNER_INPUT_JITCONFIG`, run one job, exit).
+
+## Limits
+
+* **Not for public repositories.** Runner services share a Railway private network, so a job from a
+  public repository (anyone can open a pull request) could reach a concurrent private job. Serve
+  private repositories only, and require approval for fork pull request workflows (SECURITY.md).
+* **No Docker** (a Railway container has no daemon): no `docker build`, `docker://` actions, job
+  `container:` or `services:`. Use the `pg` image or a hosted runner for those.
+* **No sudo**, so `sudo apt-get install` fails: use `setup-*` actions or bake tools into your image.
+* **CPU and processes:** each container is capped by your Railway plan (for example 24 vCPU, 24 GB and
+  about 1,000 processes and threads). `nproc` shows the host's cores, not the quota; Node's
+  `os.availableParallelism()` reads the quota. Pass explicit `-j`/worker counts to be safe.
+* **Railway API:** 1,000 requests an hour per token. A job costs about four calls and a cycle one, so
+  roughly 230 jobs an hour at the default poll; two controllers sharing one token share that budget.
+* **GitHub API:** 5,000 requests an hour per installation; each cycle reads queued runs and jobs per
+  repository of an `org:` scope. Prefer `repo:` scopes for large organizations.
+* **Cold start** is the Railway deploy plus the image pull: about 20 s when the host has the image,
+  longer on a host's first pull of a large image (see `docs/spike.md`).
+
+## Cost
+
+Railway bills the CPU, memory and network the runner services actually use, plus a little for the
+controller, which idles most of the time. A job costs roughly its duration times the CPU and memory it
+uses; check your plan's prices. Set a usage limit on the runner project so a runaway queue cannot run
+up a bill.
+
+## Versions
+
+Releases are tagged `vX.Y.Z` (see [CHANGELOG.md](CHANGELOG.md)) and publish:
+
+* `ghcr.io/farzai/github-runner-railway:vX.Y.Z` and `:pg-vX.Y.Z`
+* `ghcr.io/farzai/github-runner-railway-controller:vX.Y.Z`
+
+Every commit on `main` also publishes the same images under the commit sha. There is no `latest`:
+pin a version (or a digest, `image@sha256:...`) so a runner never changes under you.
+
+## Troubleshooting
+
+| Symptom | Look at |
+| --- | --- |
+| The controller exits at start | its log names the missing or malformed variable (never its value) |
+| `/healthz` 503 | no cycle has completed yet, or the last one is older than three polls; see the log |
+| `/healthz` `"error": true` | the last cycle failed; the `cycle failed` log line says why (often a GitHub or Railway API error, which the next cycle retries) |
+| A job stays queued | the job's labels must all be among `self-hosted`, `linux`, `x64` and your label; its repository must be in `RUNNER_SCOPES` and the App installed on it; `MAX_RUNNERS` may be reached |
+| Runner services pile up | each should go about a minute after its job ends ("runner gone" in the log); check the Railway token can delete services |
+| `docker: command not found` | expected: see Limits |
+
+## Security
+
+See [SECURITY.md](SECURITY.md).
 
 ## Develop
 
 ```
 go vet ./... && go test -race ./...
-docker build -t runner image/
+docker build --platform linux/amd64 -t runner image/
+docker build --platform linux/amd64 --target pg -t runner-pg image/
 ```
+
+Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). License: [LICENSE](LICENSE).

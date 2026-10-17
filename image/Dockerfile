@@ -43,7 +43,7 @@ ENV RUNNER_MANUALLY_TRAP_SIG=1 \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
 ENTRYPOINT ["/entrypoint.sh"]
 
-# The Postgres variant (target `pg`, label railway-private-pg): the base plus PostgreSQL 18 and the
+# The Postgres variant (target `pg`, served by its own controller and label, e.g. railway-pg): the base plus PostgreSQL 18 and the
 # system libraries Playwright's Chromium and WebKit need. Nothing runs at boot: a job starts its
 # own server with `ci-postgres start` inside its own container, so no database is shared between
 # jobs and none outlives one.
