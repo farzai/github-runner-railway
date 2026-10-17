@@ -29,7 +29,9 @@ hostile: a dependency, a compromised account or a fork pull request can run code
 * Install the GitHub App only where it is needed: Administration write is broad. Two Apps (for example
   one per organization) limit what one leaked key reaches.
 * Keep nothing else in the runner Railway project, and run the controller in a different project.
-* Set a Railway usage limit on the runner project, so a runaway queue cannot run up a bill.
+* Cap spend with `MAX_RUNNERS` and `MAX_JOB_MINUTES`. Railway's usage limits are per workspace, and its
+  hard limit stops every workload in the workspace, so use a soft limit (alert) unless the workspace
+  holds nothing else.
 * Pin the images to a version or digest.
 
 ## The sudo variant

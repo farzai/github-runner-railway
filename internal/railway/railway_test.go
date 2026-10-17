@@ -3,6 +3,7 @@ package railway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,8 +39,8 @@ func server(t *testing.T, reply func(c call) string) (*Client, *[]call, *http.He
 func TestListReturnsOnlyOurServicesWithTheirState(t *testing.T) {
 	c, _, hdr := server(t, func(call) string {
 		return `{"data":{"project":{"services":{"edges":[
-		 {"node":{"id":"1","name":"rr-abc123-x1","createdAt":"2026-10-17T11:00:00Z","serviceInstances":{"edges":[{"node":{"environmentId":"E","latestDeployment":{"status":"SUCCESS"}}}]}}},
-		 {"node":{"id":"2","name":"rr-abc123-x2","createdAt":"2026-10-17T11:01:00Z","serviceInstances":{"edges":[{"node":{"environmentId":"E","latestDeployment":{"status":"CRASHED"}}}]}}},
+		 {"node":{"id":"1","name":"rr-abc123-0000a1","createdAt":"2026-10-17T11:00:00Z","serviceInstances":{"edges":[{"node":{"environmentId":"E","latestDeployment":{"status":"SUCCESS"}}}]}}},
+		 {"node":{"id":"2","name":"rr-abc123-0000a2","createdAt":"2026-10-17T11:01:00Z","serviceInstances":{"edges":[{"node":{"environmentId":"E","latestDeployment":{"status":"CRASHED"}}}]}}},
 		 {"node":{"id":"3","name":"controller","createdAt":"2026-10-17T10:00:00Z","serviceInstances":{"edges":[]}}}
 		]}}}}`
 	})
@@ -141,5 +142,31 @@ func TestRailwayLeavesACallerSuppliedClientAlone(t *testing.T) {
 	New(Config{HTTP: shared})
 	if shared.CheckRedirect != nil {
 		t.Error("New changed the client it was given")
+	}
+}
+
+// Runners can share a project with long-lived services. Only names of the exact form the controller
+// makes (prefix, six hex of the scope hash, a dash, six hex) are runners; anything that merely starts
+// with the prefix, or looks close, is never listed, so it is never counted or deleted.
+func TestOnlyExactRunnerNamesAreListedSoSharedServicesAreNeverTouched(t *testing.T) {
+	names := []string{
+		"rr-abc123-0a1b2c", // ours
+		"rr-postgres", "rr-redis", "rr-", "rr", "RR-abc123-0a1b2c", "xrr-abc123-0a1b2c", "rrx-abc123-0a1b2c",
+		"rr-abc123-0a1b2c-extra", "rr-abc12-0a1b2c", "rr-abc123-0a1b2", "rr-ABC123-0a1b2c", "rp-abc123-0a1b2c",
+		"postgres", "redis", "controller",
+	}
+	var edges []string
+	for i, n := range names {
+		edges = append(edges, fmt.Sprintf(`{"node":{"id":"%d","name":%q,"createdAt":"2026-10-17T11:00:00Z","serviceInstances":{"edges":[]}}}`, i, n))
+	}
+	c, _, _ := server(t, func(call) string {
+		return `{"data":{"project":{"services":{"edges":[` + strings.Join(edges, ",") + `]}}}}`
+	})
+	got, err := c.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "rr-abc123-0a1b2c" || got[0].ScopeHash != "abc123" {
+		t.Fatalf("listed %+v, want only rr-abc123-0a1b2c", got)
 	}
 }
