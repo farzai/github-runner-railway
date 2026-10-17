@@ -56,6 +56,7 @@ repositories, and leave "Allow public repositories" off: the fleet serves privat
 | `RUNNER_IMAGE` | the runner image, pinned: `ghcr.io/farzai/github-runner-railway:<commit sha>` (CI publishes only sha tags) | required |
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
 | `RUNNER_LABEL` | the `runs-on` label | `railway-farzai` |
+| `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller sharing the runner project needs its own (two characters and a dash, e.g. `rp-`) | `rr-` |
 | `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an org scope and the Default group (1) is refused | none |
 | `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | cap of services in all / created in a cycle | `8` / `4` |
 | `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner, at least 20 s after the last) | `120` |

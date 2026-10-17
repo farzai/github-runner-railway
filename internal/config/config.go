@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ type Config struct {
 	RailwayToken                     string
 	RailwayProject, RailwayEnv       string
 	Image, Label                     string
+	ServicePrefix                    string // Railway service names of this controller's runners
 	Scopes                           []reconcile.Scope
 	RunnerGroupID                    int
 	MaxRunners, MaxCreatePerCycle    int
@@ -32,7 +34,7 @@ func (c Config) String() string {
 	for _, s := range c.Scopes {
 		keys = append(keys, s.Key())
 	}
-	return fmt.Sprintf("scopes=%s label=%s image=%s max=%d interval=%s", strings.Join(keys, ","), c.Label, c.Image, c.MaxRunners, c.Interval)
+	return fmt.Sprintf("scopes=%s label=%s prefix=%s image=%s max=%d interval=%s", strings.Join(keys, ","), c.Label, c.ServicePrefix, c.Image, c.MaxRunners, c.Interval)
 }
 
 // Load reads and checks the environment through get.
@@ -94,6 +96,7 @@ func Load(get func(string) string) (Config, error) {
 		return n
 	}
 	c.Label = str("RUNNER_LABEL", "railway-farzai")
+	c.ServicePrefix = str("RUNNER_SERVICE_PREFIX", "rr-")
 	c.Port = str("PORT", "8080")
 	c.AlertURL = strings.TrimSpace(get("ALERT_WEBHOOK_URL"))
 	c.RunnerGroupID = num("RUNNER_GROUP_ID", 0)
@@ -112,11 +115,18 @@ func Load(get func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("config: RUNNER_GROUP_ID must name a dedicated runner group (not the Default group, 1) for an org scope")
 		}
 	}
+	// One letter, one letter or digit, a dash: never a prefix of another valid prefix, so two
+	// controllers sharing the runner project cannot list or reap each other's services.
+	if !servicePrefix.MatchString(c.ServicePrefix) {
+		return Config{}, fmt.Errorf("config: RUNNER_SERVICE_PREFIX must be two lowercase letters or digits (the first a letter) and a dash, e.g. rp-")
+	}
 	if c.MaxRunners < 1 || c.MaxCreatePerCycle < 1 || c.Interval < 10*time.Second {
 		return Config{}, fmt.Errorf("config: MAX_RUNNERS and MAX_CREATE_PER_CYCLE must be at least 1 and POLL_SECONDS at least 10")
 	}
 	return c, nil
 }
+
+var servicePrefix = regexp.MustCompile(`^[a-z][a-z0-9]-$`)
 
 func parseScope(s string) (reconcile.Scope, error) {
 	kind, rest, ok := strings.Cut(s, ":")
