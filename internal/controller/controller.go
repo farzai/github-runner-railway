@@ -70,6 +70,7 @@ type Controller struct {
 	scopeFails  map[string]int       // scope key -> cycles in a row it could not be read
 	failAlerted bool                 // the failing state has been alerted and not yet recovered
 	lowWarn     map[string]time.Time // account -> the reset of the window already warned about
+	pending     []string             // alerts of this cycle, sent once the lock is released
 }
 
 // RateLimiter is the optional part of GH that reports GitHub's rate limit per installation.
@@ -189,8 +190,18 @@ func scopeByKey(ss []reconcile.Scope, key string) reconcile.Scope {
 // Cycle is one pass. A scope GitHub cannot be read for is left alone entirely: its services
 // are neither counted nor reaped, since a guess about them could kill a busy runner.
 func (c *Controller) Cycle(ctx context.Context) (err error) {
+	// Alerts go out after the lock is released: a slow alert webhook must not stall /healthz.
+	var alerts []string
+	defer func() {
+		for _, a := range alerts {
+			c.cfg.Alert(a)
+		}
+	}()
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer func() {
+		alerts, c.pending = c.pending, nil
+		c.mu.Unlock()
+	}()
 	now := c.now()
 	began, ghBefore, rwBefore := time.Now(), calls(c.gh), calls(c.rw)
 	created, reaped := 0, 0
@@ -303,10 +314,10 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 		if len(stuck) > 0 {
 			msg += "; scopes unreadable that long: " + strings.Join(stuck, ", ")
 		}
-		c.cfg.Alert(msg + "; last error: " + truncate(c.status.LastError, 300))
+		c.pending = append(c.pending, msg+"; last error: "+truncate(c.status.LastError, 300))
 	case c.failures == 0 && c.failAlerted:
 		c.failAlerted = false
-		c.cfg.Alert("controller: recovered, the last cycle succeeded")
+		c.pending = append(c.pending, "controller: recovered, the last cycle succeeded")
 	}
 }
 
@@ -377,7 +388,7 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 				continue
 			}
 			c.alerted[j.ID] = key
-			c.cfg.Alert(fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
+			c.pending = append(c.pending, fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
 		}
 	}
 	for id, key := range c.alerted {
