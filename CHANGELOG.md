@@ -5,6 +5,12 @@ the major version is 0, a minor release may change configuration (each such chan
 
 ## [Unreleased]
 
+### Added
+- `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
+
+### Fixed
+- A controller whose every cycle failed kept answering 200 on `/healthz` and raised no alert.
+
 ## [0.1.0] - 2026-10-17
 
 First release.

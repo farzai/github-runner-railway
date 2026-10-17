@@ -228,8 +228,14 @@ func TestAnUnreadableScopeKeepsItsAlertMarksSoAlertsDoNotRepeat(t *testing.T) {
 	_ = c.Cycle(context.Background())
 	gh.jobsErr = nil
 	_ = c.Cycle(context.Background())
-	if len(alerts) != 1 {
-		t.Errorf("alerts %v, want one: a cycle that could not read GitHub must not forget what it already alerted", alerts)
+	jobAlerts := 0
+	for _, a := range alerts {
+		if strings.HasPrefix(a, "job ") {
+			jobAlerts++
+		}
+	}
+	if jobAlerts != 1 {
+		t.Errorf("alerts %v, want one late-job alert: a cycle that could not read GitHub must not forget what it already alerted", alerts)
 	}
 }
 

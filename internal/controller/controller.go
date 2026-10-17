@@ -7,9 +7,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +48,7 @@ type Config struct {
 	AlertAfter        time.Duration // a job queued this long with no runner coming is an alert
 	Interval          time.Duration // the polling period; a webhook wakes a cycle sooner
 	MinGap            time.Duration // at least this long between a wake-up and the next cycle
+	FailAlertAfter    int           // this many failed cycles in a row raise one alert and turn /healthz 503
 	Alert             func(msg string)
 	Log               *slog.Logger
 }
@@ -59,14 +63,23 @@ type Controller struct {
 	mu      sync.Mutex
 	alerted map[int64]string // job id -> scope key
 	status  Status
+
+	failures    int            // failed cycles in a row
+	lastSuccess time.Time      // the end of the last cycle with no error
+	scopeFails  map[string]int // scope key -> cycles in a row it could not be read
+	failAlerted bool           // the failing state has been alerted and not yet recovered
 }
 
 // Status is the last cycle, for /healthz.
 type Status struct {
-	LastCycle time.Time
-	LastError string
-	Services  int
-	Queued    int
+	LastCycle           time.Time
+	LastError           string
+	Services            int
+	Queued              int
+	ConsecutiveFailures int
+	LastSuccess         time.Time
+	UnreadableScopes    []string // scopes that could not be read in the last cycle
+	Failing             bool     // ConsecutiveFailures reached FailAlertAfter
 }
 
 // New builds a Controller.
@@ -83,7 +96,11 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Minute
 	}
-	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{}}
+	if cfg.FailAlertAfter <= 0 {
+		cfg.FailAlertAfter = 3
+	}
+	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{},
+		scopeFails: map[string]int{}}
 }
 
 // OnEvent is the webhook handler. Only a queued job can need a new runner; the rest wait for
@@ -156,13 +173,16 @@ func (c *Controller) Cycle(ctx context.Context) error {
 		jobs, err := c.gh.QueuedJobs(ctx, s)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", s.Key(), err))
+			c.scopeFails[s.Key()]++
 			continue
 		}
 		rs, err := c.gh.Runners(ctx, s)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", s.Key(), err))
+			c.scopeFails[s.Key()]++
 			continue
 		}
+		delete(c.scopeFails, s.Key())
 		readable = append(readable, s)
 		queued[s.Key()], runners[s.Key()], jobsOf[s.Key()] = len(jobs), rs, jobs
 	}
@@ -213,11 +233,50 @@ func (c *Controller) Cycle(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// record keeps the cycle's outcome for /healthz and raises the failing and recovered alerts: one
+// alert when FailAlertAfter cycles in a row have failed, naming the scopes unreadable for that long,
+// and one message when a cycle succeeds again. A failed cycle still stamps LastCycle (the loop is
+// alive); ConsecutiveFailures is what tells a failing controller from a working one.
 func (c *Controller) record(now time.Time, errs []error, services, queued int) {
-	c.status = Status{LastCycle: now, Services: services, Queued: queued}
+	if len(errs) > 0 {
+		c.failures++
+	} else {
+		c.failures = 0
+		c.lastSuccess = now
+	}
+	var unreadable, stuck []string
+	for _, s := range c.cfg.Scopes {
+		if n := c.scopeFails[s.Key()]; n > 0 {
+			unreadable = append(unreadable, s.Key())
+			if n >= c.cfg.FailAlertAfter {
+				stuck = append(stuck, s.Key())
+			}
+		}
+	}
+	c.status = Status{LastCycle: now, Services: services, Queued: queued, ConsecutiveFailures: c.failures,
+		LastSuccess: c.lastSuccess, UnreadableScopes: unreadable, Failing: c.failures >= c.cfg.FailAlertAfter}
 	if len(errs) > 0 {
 		c.status.LastError = errors.Join(errs...).Error()
 	}
+	switch {
+	case c.failures >= c.cfg.FailAlertAfter && !c.failAlerted:
+		c.failAlerted = true
+		msg := fmt.Sprintf("controller: %d cycles in a row failed", c.failures)
+		if len(stuck) > 0 {
+			msg += "; scopes unreadable that long: " + strings.Join(stuck, ", ")
+		}
+		c.cfg.Alert(msg + "; last error: " + truncate(c.status.LastError, 300))
+	case c.failures == 0 && c.failAlerted:
+		c.failAlerted = false
+		c.cfg.Alert("controller: recovered, the last cycle succeeded")
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func (c *Controller) reap(ctx context.Context, r reconcile.Reap) error {
@@ -288,4 +347,27 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 			delete(c.alerted, id)
 		}
 	}
+}
+
+// HealthHandler is /healthz: 503 until a cycle has run, when the last one is older than three
+// intervals, or while FailAlertAfter or more cycles in a row have failed.
+func (c *Controller) HealthHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		st := c.Status()
+		w.Header().Set("Content-Type", "application/json")
+		if st.LastCycle.IsZero() || c.now().Sub(st.LastCycle) > 3*c.cfg.Interval || st.Failing {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		var lastSuccess any
+		if !st.LastSuccess.IsZero() {
+			lastSuccess = st.LastSuccess
+		}
+		unreadable := st.UnreadableScopes
+		if unreadable == nil {
+			unreadable = []string{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued,
+			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
+			"unreadable_scopes": unreadable})
+	})
 }

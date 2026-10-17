@@ -104,7 +104,7 @@ RUNNER_LABEL=railway
 MAX_RUNNERS=2
 ```
 
-`/healthz` answers 200 once a cycle has completed. The log line `controller up` shows the scopes,
+`/healthz` answers 200 once a cycle has completed, and 503 when the last cycle is older than three polls or `ALERT_FAILED_CYCLES` cycles in a row have failed. Its JSON: `last_cycle`, `last_success`, `consecutive_failures`, `unreadable_scopes`, `services`, `queued`, `error`. The log line `controller up` shows the scopes,
 label, prefix, image and limits it runs with.
 
 ### 4. Use it in a workflow
@@ -145,6 +145,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `IDLE_TTL_SECONDS` | how long a surplus idle runner is kept | `120` |
 | `MAX_JOB_MINUTES` | job timeout; a service older than this plus 10 minutes is removed | `360` |
 | `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | log an alert (and POST `{"text": ...}` to the URL) when a job waits this long with no runner coming | `5` / none |
+| `ALERT_FAILED_CYCLES` | after this many failed cycles in a row: one alert (naming scopes unreadable that long), `/healthz` 503, and one "recovered" alert when a cycle succeeds again | `3` |
 | `PORT` | HTTP port | `8080` |
 
 ## The runner images
@@ -215,7 +216,7 @@ pin a version (or a digest, `image@sha256:...`) so a runner never changes under 
 | Symptom | Look at |
 | --- | --- |
 | The controller exits at start | its log names the missing or malformed variable (never its value) |
-| `/healthz` 503 | no cycle has completed yet, or the last one is older than three polls; see the log |
+| `/healthz` 503 | no cycle has completed yet, the last one is older than three polls, or cycles keep failing (`consecutive_failures`, `unreadable_scopes`); see the `cycle failed` log lines |
 | `/healthz` `"error": true` | the last cycle failed; the `cycle failed` log line says why (often a GitHub or Railway API error, which the next cycle retries) |
 | A job stays queued | the job's labels must all be among `self-hosted`, `linux`, `x64` and your label; its repository must be in `RUNNER_SCOPES` and the App installed on it; `MAX_RUNNERS` may be reached |
 | Runner services pile up | each should go about a minute after its job ends ("runner gone" in the log); check the Railway token can delete services |

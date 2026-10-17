@@ -140,3 +140,15 @@ func TestTheServicePrefixDefaultsToRrAndIsValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedCyclesBeforeAnAlertDefaultsToThree(t *testing.T) {
+	c, err := Load(env(base()))
+	if err != nil || c.FailAlertAfter != 3 {
+		t.Fatalf("default %d err %v, want 3", c.FailAlertAfter, err)
+	}
+	m := base()
+	m["ALERT_FAILED_CYCLES"] = "5"
+	if c, err := Load(env(m)); err != nil || c.FailAlertAfter != 5 {
+		t.Fatalf("got %d err %v, want 5", c.FailAlertAfter, err)
+	}
+}
