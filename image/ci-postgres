@@ -4,7 +4,7 @@
 #   ci-postgres start [user] [password] [database]
 #       initdb a fresh cluster under $RUNNER_TEMP, start it on 127.0.0.1 only on a free port,
 #       wait until it answers, and append CI_POSTGRES_URL, CI_POSTGRES_PORT and CI_POSTGRES_DATA
-#       to $GITHUB_ENV (and print the URL). Defaults: ci / ci / ci.
+#       to $GITHUB_ENV (the password is masked and never printed). Defaults: ci / ci / ci.
 #   ci-postgres stop
 #       stop the server named in CI_POSTGRES_DATA (the container ends with the job anyway).
 #
@@ -29,11 +29,19 @@ start() {
     start >/dev/null || { cat "${base}/server.log" >&2; return 1; }
   psql --host "${base}" --port "${port}" --username "${user}" --dbname postgres --quiet \
     --command "CREATE DATABASE \"${db}\"" >/dev/null
-  local url="postgres://${user}:${password}@127.0.0.1:${port}/${db}"
+  # user and password are percent-encoded for the URL; the password never reaches the log
+  local enc_user enc_password
+  enc_user="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${user}")"
+  enc_password="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${password}")"
+  local url="postgres://${enc_user}:${enc_password}@127.0.0.1:${port}/${db}"
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::add-mask::${password}"
+    [[ "${enc_password}" == "${password}" ]] || echo "::add-mask::${enc_password}"
+  fi
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     { echo "CI_POSTGRES_URL=${url}"; echo "CI_POSTGRES_PORT=${port}"; echo "CI_POSTGRES_DATA=${data}"; } >>"${GITHUB_ENV}"
   fi
-  echo "${url}"
+  echo "PostgreSQL ready on 127.0.0.1:${port}, database ${db}, user ${user} (URL in CI_POSTGRES_URL)"
 }
 
 stop() {

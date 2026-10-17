@@ -50,7 +50,9 @@ ENTRYPOINT ["/entrypoint.sh"]
 FROM base AS pg
 USER root
 ARG PG_MAJOR=18
-ARG PG_VERSION=18.4-1.pgdg24.04+1
+# The live repository keeps only recent point releases; the archive keeps every one, so this pin
+# still builds after it is pruned.
+ARG PG_VERSION=18.6-1.pgdg24.04+2
 # sha256 of https://www.postgresql.org/media/keys/ACCC4CF8.asc (PGDG signing key)
 ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
 ARG NODE_VERSION=22.23.3
@@ -62,6 +64,8 @@ RUN curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.a
  && install -m 0644 /tmp/pgdg.asc /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt-archive.postgresql.org/pub/repos/apt noble-pgdg-archive main" \
+      >> /etc/apt/sources.list.d/pgdg.list \
  && install -d /etc/postgresql-common \
  && echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf \
  && apt-get update \
