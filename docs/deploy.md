@@ -26,11 +26,11 @@ see under it is private; prefer listing repositories.
 
 ## Before a controller can start (owner)
 
-1. **GitHub App** with the permissions in the README, installed on the farzai org and the selected
-   parsilver repositories; subscribe to **Workflow job**; webhook URL `https://<controller domain>/webhook`
-   (one URL per controller: if both pools use one App, the two controllers each receive every event and
-   ignore the other pool's label, so give each its own webhook path or run one App per pool, which also
-   limits what a leaked App key reaches) and a webhook secret.
+1. **One GitHub App per pool** (permissions in the README; installed on the farzai org and that pool's
+   repositories; subscribe to **Workflow job**; webhook URL `https://<that controller's domain>/webhook`; its own
+   webhook secret). A GitHub App has one webhook URL and the controller's path is fixed, so with one shared App
+   only one controller would receive events and the other would run on polling alone (every 120 s). One App per
+   pool also limits what a leaked App key can reach (Administration write is broad).
 2. **Two dedicated runner groups** in farzai, as in the table (public: public repositories allowed; private:
    private repositories only); each id is that pool's `RUNNER_GROUP_ID`. A personal repository
    (`parsilver/...`) has no groups: its runner is repository-scoped.
@@ -75,5 +75,5 @@ Do not deploy it before the App exists: without `GITHUB_APP_ID` it exits at star
 ## Rate limits and costs
 
 Railway allows 1,000 API requests an hour per token: a job costs four calls and a cycle one, about 230
-jobs an hour. Set a Railway usage limit on both projects. The cold start of the runner image was measured at
+jobs an hour. Set a Railway usage limit on both runner projects (Runner Public and Runner Private) and on Runner Controller. The cold start of the runner image was measured at
 21.6 s (docs/spike.md).
