@@ -241,6 +241,7 @@ pin a version (or a digest, `image@sha256:...`) so a runner never changes under 
 | `/healthz` 503 | no cycle has completed yet, the last one is older than three polls, or cycles keep failing (`consecutive_failures`, `unreadable_scopes`); see the `cycle failed` log lines |
 | `/healthz` `"error": true` | the last cycle failed; the `cycle failed` log line says why (often a GitHub or Railway API error, which the next cycle retries) |
 | A job stays queued | the job's labels must all be among `self-hosted`, `linux`, `x64` and your label; its repository must be in `RUNNER_SCOPES` and the App installed on it; `MAX_RUNNERS` may be reached |
+| How often cycles run, and what they cost | every cycle logs one `cycle` line: `duration`, `github_calls`, `railway_calls`, `created`, `reaped`, `failed` |
 | Runner services pile up | each should go about a minute after its job ends ("runner gone" in the log); check the Railway token can delete services |
 | `docker: command not found` | expected: see Limits |
 
