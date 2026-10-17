@@ -224,3 +224,25 @@ func TestAServiceOfAScopeNoLongerConfiguredIsKeptUntilItsJobCouldHaveEnded(t *te
 		t.Error("past the job timeout it goes")
 	}
 }
+
+// A JIT runner is registered before its service is made and GitHub removes it when its job ends,
+// while Railway keeps showing a container that exited 0 as SUCCESS. A service whose runner is gone
+// is therefore finished: it must be reaped within about a minute, not held for the whole startup
+// grace, or it blocks the next job at MaxRunners.
+func TestAServiceWhoseRunnerIsGoneIsReapedWithoutWaitingForTheStartupGrace(t *testing.T) {
+	in := Input{
+		Queued:   map[string]int{repo.Key(): 1},
+		Services: []Service{svc("rr-done", repo, 90*time.Second), svc("rr-new", repo, 30*time.Second)},
+		Runners:  map[string][]Runner{repo.Key(): {}},
+	}
+	p := plan(in)
+	if r, ok := reaped(p, "rr-done"); !ok || r.RunnerID != 0 {
+		t.Errorf("rr-done: reap %+v ok=%v, want reaped: its runner is gone and it is past the registration lag", r, ok)
+	}
+	if _, ok := reaped(p, "rr-new"); ok {
+		t.Error("rr-new was reaped: it is still inside the registration lag")
+	}
+	if got := createsFor(p, repo); got != 0 {
+		t.Errorf("creates %d, want 0: rr-new still covers the queued job", got)
+	}
+}
