@@ -1,0 +1,5 @@
+--- FAIL: TestOnlyAnswersWithATotalCountAreReadConditionally (0.11s)
+    conditional_test.go:108: 1 conditional requests for an answer without total_count, want 0
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/ghapp	0.491s
+FAIL
