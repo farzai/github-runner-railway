@@ -44,6 +44,18 @@ one and a leaked App key reaches only its own pool. A multi-pool controller is n
   its own project and token. Keep the shared group `railway` (id 3, "all repositories", public allowed)
   unused or restricted until then: with an org scope it would expose the private pool to public repos.
 
+### Rollout order (Personal Lead, within the owner's runner mandate)
+
+The split is part of the task, built right after the `skyabove` pilot, with public jobs in their own Railway
+environment (separate private network). Jobs use `runs-on: [self-hosted, <label>]`.
+
+1. Private pool, in order: `parsilver/skyabove` (pilot), `farzai/polity.farzai.com` phase 1 (Game Lead,
+   issue #154; needs `MAX_JOB_MINUTES` of at least 360), lottery-matching, geonames-data,
+   thailand-address-data (not its `fetch` job, which stays on the Mac runner), `parsilver/me.farzai.com`
+   (CI only).
+2. Public pool after the split: farzai public repositories first (for example `farzai/geonames-php`, which
+   cannot run CI now because hosted runners are refused for billing), then parsilver public repositories.
+
 ## Before a controller can start (owner)
 
 1. **One GitHub App per pool** (permissions in the README; installed on the farzai org and that pool's
