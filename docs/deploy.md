@@ -1,127 +1,101 @@
-# Deploying the fleet
+# Deploying
 
-**Private repositories only** (owner decision 2026-10-17). Public repositories stay on GitHub-hosted
-runners: a job from a public repository (anyone can open a pull request) could reach a concurrent private
-job through the shared Railway private network (SECURITY.md), so there is one pool and it never takes a
-public repository. The farzai runner group `railway` (id 3) has "Allow public repositories" **off**, so a
-public repository cannot land on a runner of an org scope even by a wrong `runs-on`.
+A step-by-step guide with placeholders. Replace every `<...>` with your own value; nothing here is
+specific to one deployment. The README's quick start is the short version.
 
-**`RUNNER_SCOPES` is the real guard.** The controller only makes runners for the scopes it lists, and a
-`repo:` scope makes repository-scoped runners that only that repository can use, so listing private
-repositories one by one and no org scope is what keeps public repositories off the pool. The group
-setting is a second layer for org scopes only; it does not apply to a `repo:` scope.
+## The shape
 
-| | Private pool |
-| --- | --- |
-| Railway project | the runner project (`d40ef972-9690-4ee0-ab42-a0ec7a8743e1`, production `bd845950-92d0-416a-b227-dde1106c8664`, currently named Runner Public) |
-| Label (`RUNNER_LABEL`) | `railway-private` |
-| Repositories (`RUNNER_SCOPES`) | private repositories, listed one by one, for example `repo:parsilver/skyabove`; no org scope |
-| GitHub runner group | `railway` (id 3) for farzai org scopes only; a `repo:` scope makes repository-scoped JIT runners, so `RUNNER_GROUP_ID` is not used for it |
-| Workflows use | `runs-on: [self-hosted, railway-private]` |
-
-| Project | Holds | Token |
+| Railway project | Holds | Token |
 | --- | --- | --- |
-| **Runner Controller** (`daf3516f-92d3-452f-a151-d852ffbeb228`, production `c62b5a0c-d534-4b43-b21d-b0e53f1179b5`) | the controller service | its own project token, used to deploy the controller |
-| the runner project | nothing but the one-job runner services the controller creates and deletes | that project's token, set on the controller as `RUNNER_RAILWAY_TOKEN` |
+| **Controller project** | one controller service per pool | used only to deploy the controller |
+| **Runner project** | nothing but the one-job runner services the controllers create and delete | a project token, given to the controller as `RUNNER_RAILWAY_TOKEN` |
 
-The GitHub App `farzai-railway-runner` (App ID 5355265) has one webhook URL, which feeds the one
-controller. It holds Administration write, so before deploying set both installations (farzai and
-parsilver) to **selected repositories**, and add each repository as it joins the rollout.
+Keep them apart: services in one Railway environment share a private network, and a job must not
+reach the controller (it holds the App key and the Railway token). Keep nothing else in the runner
+project.
 
-### Rollout order
+Serve **private repositories only** (see SECURITY.md). A pool is one controller with one label and one
+runner image; most setups need one pool, and the optional Postgres pool is a second controller.
 
-Jobs use `runs-on: [self-hosted, railway-private]`.
+## Before the controller can start
 
-1. `parsilver/skyabove` (pilot).
-2. `farzai/polity.farzai.com` phase 1 (Game Lead, issue #154; needs `MAX_JOB_MINUTES` of at least 360;
-   Polity's Postgres and WebKit needs are a separate runner image variant).
-3. `parsilver/lottery-matching`, `parsilver/geonames-data`, `parsilver/thailand-address-data` (not its
-   `fetch` job, which stays on the Mac runner), then `parsilver/me.farzai.com` (CI only).
+1. **Railway.** Create the two projects. In the runner project, create a project token and note the
+   project id and the environment id (Project Settings).
+2. **GitHub App.** Create it from [`github-app-manifest.json`](github-app-manifest.json) or by hand
+   (permissions and event in the README). Set the webhook URL once the controller has a domain
+   (step 4), generate a webhook secret and a private key, and install the App on the repositories you
+   serve (or the organization).
+3. **Repository and organization settings.**
+   * Settings, Actions, General: require approval for fork pull request workflows from all outside
+     collaborators, in every repository and organization the App is installed on.
+   * For an `org:` scope only: a dedicated runner group (Settings, Actions, Runner groups) limited to
+     the repositories you serve, "Allow public repositories" off. Its id is `RUNNER_GROUP_ID`. A
+     `repo:` scope makes repository-scoped runners and ignores the group.
+4. **Images.** The published images are public on GHCR. If you build your own, make the package
+   public or give Railway registry credentials.
 
-Each entry goes into `RUNNER_SCOPES` as `repo:<owner>/<name>` (all of the above are private; check that
-before adding one). Every repository that moves also needs its actionlint config to know the label
-(`.github/actionlint.yaml`: a `self-hosted-runner:` key holding `labels:` with `railway-private`, as in
-skyabove) and no Docker at all, because the runners have no Docker daemon: no `docker://` or other
-Docker-based action, no `docker` step, no job `container:` and no `services:` (Polity's Postgres needs a
-runner image variant instead).
+## The controller service
 
-### The Postgres pool (`railway-private-pg`)
-
-Jobs that need PostgreSQL or Playwright's browsers (Polity's check, e2e and webkit-replay) use a second
-pool: a second controller service, `controller-pg`, in the Runner Controller project, with the image
-variant `ghcr.io/farzai/github-runner-railway:pg-<commit sha>` (target `pg` of `image/Dockerfile`:
-PostgreSQL 18 and the system libraries of Playwright's Chromium and WebKit, versions pinned there).
+In the controller project, a service from `ghcr.io/farzai/github-runner-railway-controller:<version>`
+(a static binary on distroless, non-root, about 9 MB). Port `8080`, a public domain for the webhook,
+healthcheck path `/healthz`, restart on failure.
 
 | Variable | Value |
 | --- | --- |
-| `RUNNER_LABEL` | `railway-private-pg` |
-| `RUNNER_SERVICE_PREFIX` | `rp-` (the first controller keeps `rr-`; each lists and reaps only its own services) |
-| `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:pg-<commit sha>` |
-| `RUNNER_SCOPES` | only the repositories that need it, e.g. `repo:farzai/polity.farzai.com` |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | from the App |
+| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | the runner project |
+| `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:<version>` |
+| `RUNNER_SCOPES` | `repo:<owner>/<repo>`, comma-separated; `org:<org>` only when every repository the App sees there is private |
+| `RUNNER_LABEL` | your label, e.g. `railway` |
+| `RUNNER_GROUP_ID` | the runner group id, for an `org:` scope |
+| `MAX_RUNNERS` | start with `1` |
+| `MAX_JOB_MINUTES` | at least your longest job's timeout |
+
+Never put these values in a repository or a log. The controller exits at start when one is missing,
+naming the variable only. Then set the App's webhook URL to `https://<controller domain>/webhook`.
+
+`RUNNER_SCOPES` is the real guard of what the pool serves: the controller only makes runners for the
+scopes it lists, and a `repo:` scope's runners can only be used by that repository.
+
+## The Postgres pool (optional)
+
+For jobs that need PostgreSQL or Playwright's browsers, a second controller service in the same
+controller project:
+
+| Variable | Value |
+| --- | --- |
+| `RUNNER_LABEL` | e.g. `railway-pg` |
+| `RUNNER_SERVICE_PREFIX` | e.g. `rp-` (the first controller keeps `rr-`; each lists and removes only its own services) |
+| `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:pg-<version>` |
+| `RUNNER_SCOPES` | only the repositories that need it |
 | `POLL_SECONDS` | `60`: the App's one webhook URL goes to the first controller, so this one polls |
 | everything else | as the first controller (same App, same runner project and token) |
 
-A job in this pool starts its own server, which lives and dies with the job's container:
-
-```yaml
-runs-on: [self-hosted, railway-private-pg]
-steps:
-  - run: ci-postgres start polity polity polity_test   # user, password, database; writes CI_POSTGRES_URL to GITHUB_ENV
-  - run: pnpm test                                      # read the URL from CI_POSTGRES_URL
-```
-
-The server listens on 127.0.0.1 only (runner containers share a private network) on a free port, with
-fsync off: it is a throwaway test database. `ci-postgres stop` exists for symmetry; the container ends
-with the job anyway. Playwright 1.63.0's Chromium, WebKit and ffmpeg are baked in under `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`, so a job's `playwright install` of that version downloads nothing; a job on a newer Playwright downloads its own browsers into the same directory until the image's `PLAYWRIGHT_VERSION` is bumped to match.
-
-## Before a controller can start (owner)
-
-1. **The GitHub App** (permissions in the README; installed on the selected repositories only; subscribe to
-   **Workflow job**; webhook URL `https://<the controller's domain>/webhook`; its own webhook secret).
-2. **The runner group** `railway` (id 3) in farzai: public repositories **off**. A personal repository
-   (`parsilver/...`) has no groups: its runner is repository-scoped.
-3. In farzai and each parsilver repository: Settings, Actions, General, require approval for fork pull
-   request workflows from all outside collaborators.
-4. Make the GHCR packages public (`github-runner-railway` for the runner, `github-runner-railway-controller`
-   for the controller), or give Railway registry credentials.
-5. The runner Railway project (`d40ef972-...`, currently named Runner Public) already exists. Give its
-   project token to the controller as `RUNNER_RAILWAY_TOKEN`; the controller service itself lives in the
-   separate Runner Controller project.
-
-## The controller service (Runner Controller project)
-
-Image: `ghcr.io/farzai/github-runner-railway-controller:<commit sha>` (CI publishes sha tags only; it is a
-static binary on distroless, running as a non-root user, about 9 MB). Port 8080, a public domain for the
-webhook, healthcheck path `/healthz` (503 until a cycle has completed).
-
-Variables (never put them in the repository or a log):
-
-| Variable | Value |
-| --- | --- |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | from the GitHub App |
-| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | the runner project |
-| `RUNNER_LABEL` | `railway-private` |
-| `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:<commit sha>` |
-| `RUNNER_SCOPES` | private repositories only, listed one by one, e.g. `repo:parsilver/skyabove` |
-| `RUNNER_GROUP_ID` | the dedicated group's id (required for an org scope) |
-| `MAX_RUNNERS` | start small (for example 4) |
-
-Do not deploy it before the App exists: without `GITHUB_APP_ID` it exits at start with a config error
-(that is the intended behaviour, and the failure names only the variable).
+A job there runs `ci-postgres start <user> <password> <database>` and reads `CI_POSTGRES_URL`
+(README). The Playwright browsers of the version pinned in `image/Dockerfile` are baked in under
+`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`, so `playwright install` of that version downloads nothing;
+a job on another Playwright version downloads its own browsers into the same directory.
 
 ## Rollout and rollback
 
-1. Deploy the controller (the pilot, `parsilver/skyabove`, is private) with `MAX_RUNNERS=1`
-   and `RUNNER_SCOPES=repo:parsilver/skyabove`.
-2. Open a pull request in the pilot repository that changes `runs-on` to `[self-hosted, railway-private]`;
-   watch `/healthz`, the controller log and the runner service appear and disappear.
-3. Raise `MAX_RUNNERS` and add scopes one at a time. Show a scale-up to N and back to none with no killed job.
-4. **Rollback:** flip the pilot's `runs-on` back to `ubuntu-latest`, stop the controller (scale the service
-   to zero or delete it; `MAX_RUNNERS` cannot be 0), and delete any `rr-*` services left in
-   the pool's runner project (the controller's reaper removes strays past the job timeout anyway).
+1. Deploy with `MAX_RUNNERS=1` and one private pilot repository in `RUNNER_SCOPES`.
+2. In the pilot repository, open a pull request that sets `runs-on: [self-hosted, <label>]` on one job
+   (and declares the label for actionlint). Watch `/healthz`, the controller log (`created`, then
+   `reaping ... runner gone` about a minute after the job), and the runner service appear and go.
+3. Make every job you move Docker-free (no `docker://` actions, `docker` steps, `container:` or
+   `services:`) and sudo-free.
+4. Add repositories to `RUNNER_SCOPES` one at a time and raise `MAX_RUNNERS` to your parallel jobs.
+5. **Rollback:** set the jobs' `runs-on` back to a hosted runner, stop the controller (remove its
+   deployment or delete the service; `MAX_RUNNERS` cannot be 0), and delete any `<prefix>*` services
+   left in the runner project.
+
+## Upgrades
+
+Pin both images to a release (`:vX.Y.Z`, `:pg-vX.Y.Z`) or a digest. To upgrade, change
+`RUNNER_IMAGE` and the controller's image to the new version and redeploy the controller; runners
+already running finish on the old image. Read CHANGELOG.md for anything that needs a new variable.
 
 ## Rate limits and costs
 
-Railway allows 1,000 API requests an hour per token: a job costs four calls and a cycle one, about 230
-jobs an hour. Set a Railway usage limit on the runner project and on Runner Controller. The cold start of the runner image was measured at
-21.6 s (docs/spike.md).
+Railway allows 1,000 API requests an hour per token: a job costs about four calls and a cycle one.
+Set a Railway usage limit on the runner project and on the controller project.

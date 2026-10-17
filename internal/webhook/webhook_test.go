@@ -28,22 +28,22 @@ func post(h http.Handler, secret, event, body string, mutate func(*http.Request)
 	return w
 }
 
-const queued = `{"action":"queued","workflow_job":{"id":7,"labels":["self-hosted","railway-farzai"],"runner_name":""},"repository":{"full_name":"parsilver/skyabove","owner":{"login":"parsilver"}}}`
+const queued = `{"action":"queued","workflow_job":{"id":7,"labels":["self-hosted","railway"],"runner_name":""},"repository":{"full_name":"acme/app","owner":{"login":"acme"}}}`
 
 func TestAValidQueuedJobWithOurLabelNudgesTheController(t *testing.T) {
 	var got []Event
-	h := Handler("s3cret", "railway-farzai", func(e Event) { got = append(got, e) })
+	h := Handler("s3cret", "railway", func(e Event) { got = append(got, e) })
 	if w := post(h, "s3cret", "workflow_job", queued, nil); w.Code != http.StatusAccepted {
 		t.Fatalf("status %d", w.Code)
 	}
-	if len(got) != 1 || got[0].Action != "queued" || got[0].Repo != "parsilver/skyabove" || got[0].JobID != 7 {
+	if len(got) != 1 || got[0].Action != "queued" || got[0].Repo != "acme/app" || got[0].JobID != 7 {
 		t.Errorf("events %+v", got)
 	}
 }
 
 func TestABadOrMissingSignatureIsRefusedAndNothingIsHandled(t *testing.T) {
 	called := false
-	h := Handler("s3cret", "railway-farzai", func(Event) { called = true })
+	h := Handler("s3cret", "railway", func(Event) { called = true })
 	if w := post(h, "wrong", "workflow_job", queued, nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("wrong secret: status %d", w.Code)
 	}
@@ -59,25 +59,25 @@ func TestABadOrMissingSignatureIsRefusedAndNothingIsHandled(t *testing.T) {
 }
 
 func TestAnEmptySecretRefusesEverything(t *testing.T) {
-	h := Handler("", "railway-farzai", func(Event) { t.Error("handled") })
+	h := Handler("", "railway", func(Event) { t.Error("handled") })
 	if w := post(h, "", "workflow_job", queued, nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("status %d: with no secret configured nothing can be verified", w.Code)
 	}
 }
 
 func TestOtherEventsAndOtherLabelsAreAcknowledgedAndIgnored(t *testing.T) {
-	h := Handler("s", "railway-farzai", func(Event) { t.Error("handled") })
+	h := Handler("s", "railway", func(Event) { t.Error("handled") })
 	if w := post(h, "s", "ping", `{}`, nil); w.Code != http.StatusOK {
 		t.Errorf("ping: %d", w.Code)
 	}
-	other := strings.Replace(queued, "railway-farzai", "ubuntu-latest", 1)
+	other := strings.Replace(queued, "railway", "ubuntu-latest", 1)
 	if w := post(h, "s", "workflow_job", other, nil); w.Code != http.StatusOK {
 		t.Errorf("other label: %d", w.Code)
 	}
 }
 
 func TestAHugeBodyIsRefused(t *testing.T) {
-	h := Handler("s", "railway-farzai", func(Event) {})
+	h := Handler("s", "railway", func(Event) {})
 	big := strings.Repeat("a", 2<<20)
 	if w := post(h, "s", "workflow_job", big, nil); w.Code != http.StatusRequestEntityTooLarge && w.Code != http.StatusUnauthorized {
 		t.Errorf("status %d", w.Code)

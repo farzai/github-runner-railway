@@ -1,0 +1,19 @@
+{
+  "name": "railway-runners-CHANGE-ME",
+  "url": "https://github.com/farzai/github-runner-railway",
+  "hook_attributes": {
+    "url": "https://CONTROLLER-DOMAIN.up.railway.app/webhook",
+    "active": true
+  },
+  "redirect_url": "https://github.com/farzai/github-runner-railway",
+  "public": false,
+  "default_permissions": {
+    "administration": "write",
+    "actions": "read",
+    "metadata": "read",
+    "organization_self_hosted_runners": "write"
+  },
+  "default_events": [
+    "workflow_job"
+  ]
+}
