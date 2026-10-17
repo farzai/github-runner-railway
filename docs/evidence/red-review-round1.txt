@@ -1,0 +1,37 @@
+--- FAIL: TestARunnerThatIsOfflinePastTheGraceIsDeadAndReapedWithItsRunner (0.00s)
+--- FAIL: TestAServiceOfAScopeNoLongerConfiguredIsKeptUntilItsJobCouldHaveEnded (0.00s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/reconcile	0.347s
+FAIL
+--- FAIL: TestRunnersCarryTheirOnlineStatus (0.05s)
+--- FAIL: TestOnlyJobsOurRunnerCanTakeAreCounted (0.05s)
+--- FAIL: TestRunsAndJobsAreReadAcrossPagesAndTooManyPagesIsAnError (0.06s)
+--- FAIL: TestALinkToAnotherSchemeOrHostIsNotFollowed (0.11s)
+--- FAIL: TestRedirectsAreNeverFollowedSoNoCredentialTravelsWithOne (0.03s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/ghapp	1.515s
+FAIL
+--- FAIL: TestAnOrgScopeNeedsAnExplicitNonDefaultRunnerGroup (0.00s)
+    config_test.go:79: an org scope with no group: err <nil>
+    config_test.go:83: the Default group (1) accepted: a dedicated group is required
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/config	0.340s
+--- FAIL: TestARedirectIsNotFollowedAndTheTokenGoesNowhereElse (0.00s)
+    railway_test.go:135: err railway: undecodable answer hits 1: the Project-Access-Token must not follow a redirect
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/railway	0.398s
+FAIL
+ok  	github.com/farzai/github-runner-railway/internal/config	(cached)
+--- FAIL: TestRunStopsWhileWaitingOutTheGapWhenTheContextEnds (2.12s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	2.523s
+--- FAIL: TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken (0.06s)
+--- FAIL: TestACallerSuppliedClientIsNotChanged (0.08s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/ghapp	3.164s
+--- FAIL: TestRailwayLeavesACallerSuppliedClientAlone (0.00s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/railway	0.472s
+ok  	github.com/farzai/github-runner-railway/internal/reconcile	(cached)
+ok  	github.com/farzai/github-runner-railway/internal/webhook	(cached)
+FAIL
