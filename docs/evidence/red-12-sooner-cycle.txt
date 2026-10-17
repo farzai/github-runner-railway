@@ -1,0 +1,10 @@
+--- FAIL: TestTheWaitAfterANudgeIsTheDebounceUnlessTheLastCycleStartedTooRecently (0.00s)
+    wake_test.go:33: long after the last cycle: 20s, want 3s
+    wake_test.go:33: just after a cycle started: 20s, want 18s
+    wake_test.go:33: the gap almost over: 20s, want 3s
+    wake_test.go:33: no cycle yet: 20s, want 3s
+--- FAIL: TestABurstOfNudgesInsideTheDebounceIsOneCycle (0.66s)
+    wake_test.go:67: cycles 11, want 2: the start-up cycle and one for the burst
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	1.096s
+FAIL

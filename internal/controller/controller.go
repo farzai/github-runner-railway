@@ -47,7 +47,8 @@ type Config struct {
 	MaxAge            time.Duration
 	AlertAfter        time.Duration // a job queued this long with no runner coming is an alert
 	Interval          time.Duration // the polling period; a webhook wakes a cycle sooner
-	MinGap            time.Duration // at least this long between a wake-up and the next cycle
+	MinGap            time.Duration // a cycle never starts sooner than this after the previous one started
+	Debounce          time.Duration // after a wake-up, wait this long so a burst of events is one cycle
 	FailAlertAfter    int           // this many failed cycles in a row raise one alert and turn /healthz 503
 	Alert             func(msg string)
 	Log               *slog.Logger
@@ -93,6 +94,9 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 	if cfg.MinGap <= 0 {
 		cfg.MinGap = 20 * time.Second
 	}
+	if cfg.Debounce <= 0 {
+		cfg.Debounce = 3 * time.Second
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 2 * time.Minute
 	}
@@ -126,24 +130,42 @@ func (c *Controller) Status() Status {
 	return c.status
 }
 
-// Run cycles until ctx ends: on every interval and on every nudge.
+// Run cycles until ctx ends: on every interval and on every nudge. A nudge waits out the debounce
+// (and the rest of MinGap since the previous cycle started); nudges that arrive meanwhile are the
+// same cycle. GitHub may not list a just-queued job yet, so a nudged cycle that found nothing
+// queued checks once more after MinGap. The interval restarts after every cycle, so a tick never
+// follows a nudged cycle straight away.
 func (c *Controller) Run(ctx context.Context) {
 	t := time.NewTicker(c.cfg.Interval)
 	defer t.Stop()
+	var retry <-chan time.Time
+	nudged := false
 	for {
+		lastStart := time.Now()
 		if err := c.Cycle(ctx); err != nil {
 			c.cfg.Log.Error("cycle failed", "err", err.Error())
 		}
+		t.Reset(c.cfg.Interval)
+		retry = nil
+		if nudged && c.Status().Queued == 0 {
+			retry = time.After(c.cfg.MinGap)
+		}
+		nudged = false
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-retry:
 		case <-c.wake:
-			// let a burst of events land in one cycle, and bound the scan rate
+			nudged = true
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(c.cfg.MinGap):
+			case <-time.After(wakeDelay(time.Now(), lastStart, c.cfg.Debounce, c.cfg.MinGap)):
+			}
+			select { // a nudge that came in during the wait is this cycle
+			case <-c.wake:
+			default:
 			}
 		}
 	}
@@ -370,4 +392,16 @@ func (c *Controller) HealthHandler() http.Handler {
 			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
 			"unreadable_scopes": unreadable})
 	})
+}
+
+// wakeDelay is how long to wait after a wake-up: the debounce, or longer when the previous cycle
+// started less than minGap ago.
+func wakeDelay(now, lastStart time.Time, debounce, minGap time.Duration) time.Duration {
+	if lastStart.IsZero() {
+		return debounce
+	}
+	if rest := lastStart.Add(minGap).Sub(now); rest > debounce {
+		return rest
+	}
+	return debounce
 }

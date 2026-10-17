@@ -6,6 +6,8 @@ the major version is 0, a minor release may change configuration (each such chan
 ## [Unreleased]
 
 ### Changed
+- A queued-job webhook starts a cycle after a 3 s debounce instead of a fixed 20 s; cycles still start at least 20 s apart (measured from the previous cycle's start).
+
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.
 
 ### Added
