@@ -11,9 +11,6 @@ the major version is 0, a minor release may change configuration (each such chan
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.
 
 ### Added
-- `PG_EXTENSIONS` build arg for the `pg` target (pinned PGDG extension packages of the chosen `PG_MAJOR`), `image/smoke-pg.sh`, and a CI job that builds and smoke-tests PostgreSQL 18 and 16 with pg_partman.
-
-### Added
 - `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
 
 ### Fixed
