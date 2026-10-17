@@ -72,7 +72,7 @@ steps:
 
 The server listens on 127.0.0.1 only (runner containers share a private network) on a free port, with
 fsync off: it is a throwaway test database. `ci-postgres stop` exists for symmetry; the container ends
-with the job anyway. The browsers themselves still come from `playwright install` in the job.
+with the job anyway. Playwright 1.63.0's Chromium, WebKit and ffmpeg are baked in under `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`, so a job's `playwright install` of that version downloads nothing; a job on a newer Playwright downloads its own browsers into the same directory until the image's `PLAYWRIGHT_VERSION` is bumped to match.
 
 ## Before a controller can start (owner)
 
