@@ -1,0 +1,7 @@
+--- FAIL: TestEveryCycleFailingAlertsOnceAnd503sThenRecovers (0.00s)
+    health_test.go:56: cycle 1: consecutive_failures <nil>
+--- FAIL: TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking (0.00s)
+    health_test.go:87: alerts [], want one naming only org:acme
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	0.555s
+FAIL
