@@ -61,8 +61,10 @@ ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e
 ARG NODE_VERSION=22.23.3
 ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 ARG PLAYWRIGHT_VERSION=1.63.0
-RUN for p in ${PG_EXTENSIONS}; do \
-      case "${p}" in "postgresql-${PG_MAJOR}-"*=?*) ;; *) echo "PG_EXTENSIONS entry ${p} is not postgresql-${PG_MAJOR}-<name>=<version>" >&2; exit 1 ;; esac; \
+RUN set -f \
+ && for p in ${PG_EXTENSIONS}; do \
+      echo "${p}" | grep -Eqx "postgresql-${PG_MAJOR}-[a-z0-9][a-z0-9.+-]*=[0-9][A-Za-z0-9.+:~-]*" \
+        || { echo "PG_EXTENSIONS entry ${p} is not postgresql-${PG_MAJOR}-<name>=<version>" >&2; exit 1; }; \
     done \
  && curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
  && echo "${PGDG_KEY_SHA256}  /tmp/pgdg.asc" | sha256sum -c - \
