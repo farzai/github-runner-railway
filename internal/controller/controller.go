@@ -160,10 +160,16 @@ func scopeByKey(ss []reconcile.Scope, key string) reconcile.Scope {
 
 // Cycle is one pass. A scope GitHub cannot be read for is left alone entirely: its services
 // are neither counted nor reaped, since a guess about them could kill a busy runner.
-func (c *Controller) Cycle(ctx context.Context) error {
+func (c *Controller) Cycle(ctx context.Context) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
+	began, ghBefore, rwBefore := time.Now(), calls(c.gh), calls(c.rw)
+	created, reaped := 0, 0
+	defer func() {
+		c.cfg.Log.Info("cycle", "duration", time.Since(began).Round(time.Millisecond).String(), "github_calls", calls(c.gh)-ghBefore,
+			"railway_calls", calls(c.rw)-rwBefore, "created", created, "reaped", reaped, "failed", err != nil)
+	}()
 	var errs []error
 	queued := map[string]int{}
 	runners := map[string][]reconcile.Runner{}
@@ -214,17 +220,20 @@ func (c *Controller) Cycle(ctx context.Context) error {
 	for _, r := range plan.Reap {
 		if err := c.reap(ctx, r); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		reaped++
 	}
-	created := map[string]int{}
+	createdBy := map[string]int{}
 	for _, cr := range plan.Create {
 		if err := c.create(ctx, scopeByKey(readable, cr.Scope)); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		created[cr.Scope]++
+		createdBy[cr.Scope]++
+		created++
 	}
-	c.alertLate(now, jobsOf, services, runners, created)
+	c.alertLate(now, jobsOf, services, runners, createdBy)
 	total := 0
 	for _, n := range queued {
 		total += n
@@ -370,4 +379,16 @@ func (c *Controller) HealthHandler() http.Handler {
 			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
 			"unreadable_scopes": unreadable})
 	})
+}
+
+// CallCounter is the optional part of GH and RW that counts the API calls made so far.
+type CallCounter interface {
+	Calls() int64
+}
+
+func calls(x any) int64 {
+	if cc, ok := x.(CallCounter); ok {
+		return cc.Calls()
+	}
+	return 0
 }

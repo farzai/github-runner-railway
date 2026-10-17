@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/farzai/github-runner-railway/internal/reconcile"
@@ -44,10 +45,11 @@ type Config struct {
 
 // Client talks to GitHub as the App.
 type Client struct {
-	cfg  Config
-	key  *rsa.PrivateKey
-	mu   sync.Mutex
-	toks map[string]token // by owner, or owner/repo for a repo scope
+	calls atomic.Int64 // API requests sent
+	cfg   Config
+	key   *rsa.PrivateKey
+	mu    sync.Mutex
+	toks  map[string]token // by owner, or owner/repo for a repo scope
 }
 
 type token struct {
@@ -124,6 +126,7 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.calls.Add(1)
 	res, err := c.cfg.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ghapp: %s %s: %w", method, req.URL.Path, err)
@@ -382,3 +385,6 @@ func (c *Client) canTake(jobLabels []string) bool {
 	}
 	return ours
 }
+
+// Calls is the number of API requests sent so far.
+func (c *Client) Calls() int64 { return c.calls.Load() }

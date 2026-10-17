@@ -1,0 +1,5 @@
+--- FAIL: TestEveryCycleLogsOneSummaryLine (0.00s)
+    summary_test.go:44: log "time=2026-10-17T20:03:34.071+07:00 level=INFO msg=created service=rr-efd5cf-497818 scope=repo:acme/app\n": want one cycle line
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	0.395s
+FAIL

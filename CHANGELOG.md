@@ -9,6 +9,8 @@ the major version is 0, a minor release may change configuration (each such chan
 - `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
 
 ### Fixed
+- The `ALERT` log line lost its text: it was logged under `msg`, which slog uses for the message. It is now under `alert`.
+- Every cycle now logs one `cycle` line with its duration, GitHub and Railway calls, creates, reaps and whether it failed.
 - A controller whose every cycle failed kept answering 200 on `/healthz` and raised no alert.
 
 ## [0.1.0] - 2026-10-17
