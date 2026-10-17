@@ -50,12 +50,18 @@ func Load(get func(string) string) (Config, error) {
 		into *string
 	}{
 		{"GITHUB_APP_ID", &c.AppID}, {"GITHUB_APP_PRIVATE_KEY", &c.PrivateKey}, {"GITHUB_WEBHOOK_SECRET", &c.WebhookSecret},
-		{"RAILWAY_API_TOKEN", &c.RailwayToken}, {"RAILWAY_PROJECT_ID", &c.RailwayProject}, {"RAILWAY_ENVIRONMENT_ID", &c.RailwayEnv},
+		{"RUNNER_RAILWAY_TOKEN", &c.RailwayToken}, {"RUNNER_RAILWAY_PROJECT_ID", &c.RailwayProject}, {"RUNNER_RAILWAY_ENVIRONMENT_ID", &c.RailwayEnv},
 		{"RUNNER_IMAGE", &c.Image},
 	} {
 		if err := need(f.name, f.into); err != nil {
 			return Config{}, err
 		}
+	}
+	// Railway injects RAILWAY_PROJECT_ID into the controller for the project the controller runs in; the
+	// runner project is another one, and a controller that managed its own project would put runner
+	// services (running untrusted jobs) on its private network.
+	if own := strings.TrimSpace(get("RAILWAY_PROJECT_ID")); own != "" && own == c.RailwayProject {
+		return Config{}, fmt.Errorf("config: RUNNER_RAILWAY_PROJECT_ID is the project the controller runs in; the runners belong in their own project")
 	}
 	var raw string
 	if err := need("RUNNER_SCOPES", &raw); err != nil {

@@ -45,14 +45,14 @@ Permissions: repository **Administration: Read and write**, **Actions: Read**, *
 organization **Self-hosted runners: Read and write**. Subscribe to **Workflow job**. Install it on the
 org and on the personal repositories you serve (selected repositories only, since Administration is
 broad). Under the org: Settings, Actions, Runner groups: use a dedicated group limited to selected
-repositories, and turn on "Allow public repositories" there only if public repositories use it.
+repositories, and leave "Allow public repositories" off: the fleet serves private repositories only.
 
 ## Configuration (controller variables)
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (PEM may keep `\n` escaped) | required |
-| `RAILWAY_API_TOKEN`, `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project | required |
+| `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | a project token for the **runner** project (not `RAILWAY_*`: Railway injects those for the controller's own project) | required |
 | `RUNNER_IMAGE` | the runner image, pinned: `ghcr.io/farzai/github-runner-railway:<commit sha>` (CI publishes only sha tags) | required |
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
 | `RUNNER_LABEL` | the `runs-on` label | `railway-farzai` |

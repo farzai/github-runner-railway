@@ -11,7 +11,7 @@ func env(m map[string]string) func(string) string { return func(k string) string
 func base() map[string]string {
 	return map[string]string{
 		"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "KEY-SECRET", "GITHUB_WEBHOOK_SECRET": "WH-SECRET",
-		"RAILWAY_API_TOKEN": "RW-SECRET", "RAILWAY_PROJECT_ID": "p", "RAILWAY_ENVIRONMENT_ID": "e",
+		"RUNNER_RAILWAY_TOKEN": "RW-SECRET", "RUNNER_RAILWAY_PROJECT_ID": "p", "RUNNER_RAILWAY_ENVIRONMENT_ID": "e",
 		"RUNNER_IMAGE": "ghcr.io/farzai/github-runner-railway:1", "RUNNER_SCOPES": "org:farzai, repo:parsilver/skyabove",
 		"RUNNER_GROUP_ID": "7",
 	}
@@ -31,7 +31,7 @@ func TestLoadParsesScopesAndDefaults(t *testing.T) {
 }
 
 func TestLoadRefusesWhatIsMissingOrMalformedAndNamesOnlyTheVariable(t *testing.T) {
-	for _, k := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RUNNER_IMAGE", "RUNNER_SCOPES"} {
+	for _, k := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "RUNNER_RAILWAY_TOKEN", "RUNNER_RAILWAY_PROJECT_ID", "RUNNER_RAILWAY_ENVIRONMENT_ID", "RUNNER_IMAGE", "RUNNER_SCOPES"} {
 		m := base()
 		delete(m, k)
 		_, err := Load(env(m))
@@ -91,5 +91,30 @@ func TestAnOrgScopeNeedsAnExplicitNonDefaultRunnerGroup(t *testing.T) {
 	m["RUNNER_SCOPES"] = "repo:parsilver/skyabove"
 	if _, err := Load(env(m)); err != nil {
 		t.Errorf("repo scopes use the default group by necessity and need none: %v", err)
+	}
+}
+
+// Railway injects its own RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID (and RAILWAY_*) into every service
+// for the project the service runs in. A controller that read the runner project from those names would
+// manage its OWN project, so its settings use other names, and it refuses to start if the runner project
+// is the project it runs in.
+func TestTheRunnerProjectComesFromVariablesRailwayDoesNotInject(t *testing.T) {
+	m := base()
+	m["RAILWAY_PROJECT_ID"] = "the-controllers-own-project" // what Railway injects
+	m["RAILWAY_ENVIRONMENT_ID"] = "the-controllers-own-environment"
+	c, err := Load(env(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RailwayProject != "p" || c.RailwayEnv != "e" || c.RailwayToken != "RW-SECRET" {
+		t.Errorf("project %q env %q: the runner project must come from RUNNER_RAILWAY_*, never from what Railway injects", c.RailwayProject, c.RailwayEnv)
+	}
+}
+
+func TestTheControllerRefusesToManageTheProjectItRunsIn(t *testing.T) {
+	m := base()
+	m["RAILWAY_PROJECT_ID"] = "p" // the controller's own project is the runner project
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "RUNNER_RAILWAY_PROJECT_ID") {
+		t.Errorf("err %v: runner services created beside the controller share its private network", err)
 	}
 }
