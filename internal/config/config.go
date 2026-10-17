@@ -24,6 +24,7 @@ type Config struct {
 	MaxRunners, MaxCreatePerCycle    int
 	Interval, StartupGrace, IdleTTL  time.Duration
 	MaxAge, AlertAfter               time.Duration
+	FailAlertAfter                   int // failed cycles in a row before an alert and a 503
 	AlertURL                         string
 	Port                             string
 }
@@ -107,6 +108,7 @@ func Load(get func(string) string) (Config, error) {
 	c.IdleTTL = time.Duration(num("IDLE_TTL_SECONDS", 120)) * time.Second
 	c.MaxAge = time.Duration(num("MAX_JOB_MINUTES", 360)+10) * time.Minute
 	c.AlertAfter = time.Duration(num("ALERT_QUEUED_MINUTES", 5)) * time.Minute
+	c.FailAlertAfter = num("ALERT_FAILED_CYCLES", 3)
 	if err != nil {
 		return Config{}, err
 	}

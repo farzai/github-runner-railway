@@ -45,7 +45,7 @@ func main() {
 	c := controller.New(controller.Config{
 		Scopes: cfg.Scopes, Prefix: cfg.ServicePrefix, MaxRunners: cfg.MaxRunners, MaxCreatePerCycle: cfg.MaxCreatePerCycle,
 		StartupGrace: cfg.StartupGrace, IdleTTL: cfg.IdleTTL, MaxAge: cfg.MaxAge, AlertAfter: cfg.AlertAfter,
-		Interval: cfg.Interval, Alert: alert, Log: log,
+		Interval: cfg.Interval, FailAlertAfter: cfg.FailAlertAfter, Alert: alert, Log: log,
 	}, gh, rw)
 
 	mux := http.NewServeMux()
@@ -53,14 +53,7 @@ func main() {
 		log.Info("workflow_job", "action", e.Action, "repo", e.Repo)
 		c.OnEvent(e)
 	}))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		st := c.Status()
-		w.Header().Set("Content-Type", "application/json")
-		if st.LastCycle.IsZero() || time.Since(st.LastCycle) > 3*cfg.Interval {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued, "error": st.LastError != ""})
-	})
+	mux.Handle("/healthz", c.HealthHandler())
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
