@@ -154,8 +154,8 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | --- | --- |
 | `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck; no `sudo`, no Docker |
 | `ghcr.io/farzai/github-runner-railway:pg-<version>` | the above plus PostgreSQL 18, Playwright's Chromium/WebKit system libraries and browsers (see `image/Dockerfile` for the pinned versions), and `ci-postgres` |
-
 | `ghcr.io/farzai/github-runner-railway:sudo-<version>` | the base image plus passwordless `sudo` for the runner user (opt-in, see below) |
+| `ghcr.io/farzai/github-runner-railway:redis-<version>` | the base image plus a pinned `redis-server` and `ci-redis` |
 
 To serve both, run a **second controller** with `RUNNER_LABEL=railway-pg`, `RUNNER_SERVICE_PREFIX=rp-`
 and the `pg-` image, in the same runner project. Each controller lists and removes only its own
@@ -189,6 +189,22 @@ steps:
 `ci-postgres` runs initdb as the runner user, listens on 127.0.0.1 only on a free port with fsync
 off, masks the password, and writes `CI_POSTGRES_URL`, `CI_POSTGRES_PORT` and `CI_POSTGRES_DATA` to
 `$GITHUB_ENV`. The server ends with the container.
+
+### Redis
+
+In a job on the `redis-` image (or a `pg` image built with `--build-arg REDIS_VERSION=<version>`, for
+both), start a throwaway Redis the same way as Postgres:
+
+```yaml
+steps:
+  - run: ci-redis start          # optional port; CI_REDIS_URL is set from the next step on
+  - run: npm test
+```
+
+`ci-redis` runs `redis-server` as the runner user on 127.0.0.1 only (a free port unless one is given),
+without persistence, waits until it answers `PING`, and writes `CI_REDIS_URL`, `CI_REDIS_PORT` and
+`CI_REDIS_DIR` to `$GITHUB_ENV`; `ci-redis stop` shuts it down. Redis comes from packages.redis.io,
+with the signing key pinned by sha256 and the version pinned in `image/Dockerfile`.
 
 ### Your own image
 

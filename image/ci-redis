@@ -1,0 +1,67 @@
+#!/bin/bash
+# A Redis server for one job, inside the job's own container (images built with Redis).
+#
+#   ci-redis start [port]
+#       start redis-server on 127.0.0.1 only (a free port unless one is given), no persistence,
+#       wait until it answers PING, and append CI_REDIS_URL, CI_REDIS_PORT and CI_REDIS_DIR to
+#       $GITHUB_ENV (and print the URL).
+#   ci-redis stop
+#       shut down the server named in CI_REDIS_PORT (the container ends with the job anyway).
+#
+# The server listens on loopback only: runner containers share a Railway private network.
+set -euo pipefail
+
+start() {
+  local port="${1:-}"
+  local dir="${RUNNER_TEMP:-/tmp}/ci-redis"
+  # a server from an earlier start in this job is still running: refuse rather than wipe its
+  # directory (and, on the same port, mistake its PONG for the new server's)
+  if [[ -f "${dir}/redis.pid" ]] && kill -0 "$(cat "${dir}/redis.pid")" 2>/dev/null; then
+    echo "ci-redis: a server is already running (pid $(cat "${dir}/redis.pid")); run ci-redis stop first" >&2
+    return 1
+  fi
+  rm -rf "${dir}" && mkdir -p "${dir}"
+  if [[ -z "${port}" ]]; then
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  fi
+  redis-server --bind 127.0.0.1 --port "${port}" --protected-mode yes --save '' --appendonly no \
+    --dir "${dir}" --daemonize yes --logfile "${dir}/server.log" --pidfile "${dir}/redis.pid"
+  for _ in $(seq 1 100); do
+    if [[ "$(redis-cli -h 127.0.0.1 -p "${port}" PING 2>/dev/null)" == PONG ]]; then
+      local url="redis://127.0.0.1:${port}/0"
+      if [[ -n "${GITHUB_ENV:-}" ]]; then
+        { echo "CI_REDIS_URL=${url}"; echo "CI_REDIS_PORT=${port}"; echo "CI_REDIS_DIR=${dir}"; } >>"${GITHUB_ENV}"
+      fi
+      echo "${url}"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "redis-server did not answer PING within 10 s" >&2
+  cat "${dir}/server.log" >&2 || true
+  return 1
+}
+
+stop() {
+  local port="${CI_REDIS_PORT:-}"
+  if [[ -z "${port}" ]]; then
+    echo "CI_REDIS_PORT is not set; nothing to stop"
+    return 0
+  fi
+  redis-cli -h 127.0.0.1 -p "${port}" SHUTDOWN NOSAVE >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do
+    if ! redis-cli -h 127.0.0.1 -p "${port}" PING >/dev/null 2>&1; then
+      echo "stopped"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "ci-redis: the server on port ${port} still answers after SHUTDOWN" >&2
+  return 1
+}
+
+case "${1:-}" in
+  start) shift; start "$@" ;;
+  stop) stop ;;
+  *) echo "usage: ci-redis start [port] | stop" >&2; exit 2 ;;
+esac
