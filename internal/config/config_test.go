@@ -152,3 +152,11 @@ func TestFailedCyclesBeforeAnAlertDefaultsToThree(t *testing.T) {
 		t.Fatalf("got %d err %v, want 5", c.FailAlertAfter, err)
 	}
 }
+
+func TestZeroFailedCyclesIsRefusedRatherThanIgnored(t *testing.T) {
+	m := base()
+	m["ALERT_FAILED_CYCLES"] = "0"
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "ALERT_FAILED_CYCLES") {
+		t.Fatalf("err %v, want an ALERT_FAILED_CYCLES error", err)
+	}
+}

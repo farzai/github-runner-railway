@@ -1,0 +1,5 @@
+--- FAIL: TestAKeptBusyRunnerIsNotCountedAsReaped (0.00s)
+    summary_test.go:66: deleted [], log "time=2026-10-17T20:57:43.773+07:00 level=INFO msg=\"runner turned busy; kept\" service=rr-efd5cf-aaaaaa\ntime=2026-10-17T20:57:43.773+07:00 level=INFO msg=cycl
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	0.465s
+FAIL

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/farzai/github-runner-railway/internal/reconcile"
@@ -45,6 +46,7 @@ type Config struct {
 
 // Client talks to GitHub as the App.
 type Client struct {
+	calls  atomic.Int64 // API requests sent
 	cfg    Config
 	key    *rsa.PrivateKey
 	mu     sync.Mutex
@@ -151,6 +153,7 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 			req.Header.Set("If-None-Match", cached.etag)
 		}
 	}
+	c.calls.Add(1)
 	res, err := c.cfg.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ghapp: %s %s: %w", method, req.URL.Path, err)
@@ -502,3 +505,6 @@ func hasTotalCount(raw []byte) bool {
 	}
 	return json.Unmarshal(raw, &probe) == nil && probe.TotalCount != nil
 }
+
+// Calls is the number of API requests sent so far.
+func (c *Client) Calls() int64 { return c.calls.Load() }

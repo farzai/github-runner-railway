@@ -96,3 +96,28 @@ func TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking(t *testing.T) {
 		t.Fatalf("created %v: the readable scope must keep getting runners", rw.created)
 	}
 }
+
+// Alerts are sent after the cycle releases its lock: a slow alert webhook must not stall /healthz,
+// which reads the status under the same lock.
+func TestAlertsAreSentWithoutHoldingTheLock(t *testing.T) {
+	boom := errors.New("github down")
+	gh := &fakeGH{jobsErr: map[string]error{org.Key(): boom, repo.Key(): boom}}
+	c, _ := alerting(gh, &fakeRW{})
+	sent := make(chan struct{}, 4)
+	c.cfg.Alert = func(string) { _ = c.Status(); sent <- struct{}{} }
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 3; i++ {
+			_ = c.Cycle(context.Background())
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the cycle deadlocked: the alert ran while the status lock was held")
+	}
+	if len(sent) != 1 {
+		t.Fatalf("alerts %d, want 1", len(sent))
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/farzai/github-runner-railway/internal/reconcile"
@@ -33,7 +34,8 @@ type Config struct {
 
 // Client talks to Railway.
 type Client struct {
-	cfg Config
+	calls atomic.Int64 // API requests sent
+	cfg   Config
 }
 
 // New builds a Client.
@@ -53,6 +55,7 @@ func New(cfg Config) *Client {
 }
 
 func (c *Client) do(ctx context.Context, query string, vars map[string]any, into any) error {
+	c.calls.Add(1)
 	body, _ := json.Marshal(map[string]any{"query": query, "variables": vars})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(body))
 	if err != nil {
@@ -181,3 +184,6 @@ func (c *Client) Create(ctx context.Context, name string, vars map[string]string
 func (c *Client) Delete(ctx context.Context, id string) error {
 	return c.do(ctx, `mutation($i:String!,$e:String){serviceDelete(id:$i,environmentId:$e)}`, map[string]any{"i": id, "e": c.cfg.EnvironmentID}, nil)
 }
+
+// Calls is the number of API requests sent so far.
+func (c *Client) Calls() int64 { return c.calls.Load() }

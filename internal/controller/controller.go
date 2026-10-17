@@ -70,6 +70,7 @@ type Controller struct {
 	scopeFails  map[string]int       // scope key -> cycles in a row it could not be read
 	failAlerted bool                 // the failing state has been alerted and not yet recovered
 	lowWarn     map[string]time.Time // account -> the reset of the window already warned about
+	pending     []string             // alerts of this cycle, sent once the lock is released
 }
 
 // RateLimiter is the optional part of GH that reports GitHub's rate limit per installation.
@@ -188,10 +189,26 @@ func scopeByKey(ss []reconcile.Scope, key string) reconcile.Scope {
 
 // Cycle is one pass. A scope GitHub cannot be read for is left alone entirely: its services
 // are neither counted nor reaped, since a guess about them could kill a busy runner.
-func (c *Controller) Cycle(ctx context.Context) error {
+func (c *Controller) Cycle(ctx context.Context) (err error) {
+	// Alerts go out after the lock is released: a slow alert webhook must not stall /healthz.
+	var alerts []string
+	defer func() {
+		for _, a := range alerts {
+			c.cfg.Alert(a)
+		}
+	}()
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer func() {
+		alerts, c.pending = c.pending, nil
+		c.mu.Unlock()
+	}()
 	now := c.now()
+	began, ghBefore, rwBefore := time.Now(), calls(c.gh), calls(c.rw)
+	created, reaped := 0, 0
+	defer func() {
+		c.cfg.Log.Info("cycle", "duration", time.Since(began).Round(time.Millisecond).String(), "github_calls", calls(c.gh)-ghBefore,
+			"railway_calls", calls(c.rw)-rwBefore, "created", created, "reaped", reaped, "failed", err != nil)
+	}()
 	var errs []error
 	queued := map[string]int{}
 	runners := map[string][]reconcile.Runner{}
@@ -240,19 +257,25 @@ func (c *Controller) Cycle(ctx context.Context) error {
 			IdleTTL: c.cfg.IdleTTL, MaxAge: c.cfg.MaxAge, Scopes: readable},
 	})
 	for _, r := range plan.Reap {
-		if err := c.reap(ctx, r); err != nil {
+		deleted, err := c.reap(ctx, r)
+		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		if deleted {
+			reaped++
 		}
 	}
-	created := map[string]int{}
+	createdBy := map[string]int{}
 	for _, cr := range plan.Create {
 		if err := c.create(ctx, scopeByKey(readable, cr.Scope)); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		created[cr.Scope]++
+		createdBy[cr.Scope]++
+		created++
 	}
-	c.alertLate(now, jobsOf, services, runners, created)
+	c.alertLate(now, jobsOf, services, runners, createdBy)
 	c.warnLowLimits()
 	total := 0
 	for _, n := range queued {
@@ -294,10 +317,10 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 		if len(stuck) > 0 {
 			msg += "; scopes unreadable that long: " + strings.Join(stuck, ", ")
 		}
-		c.cfg.Alert(msg + "; last error: " + truncate(c.status.LastError, 300))
+		c.pending = append(c.pending, msg+"; last error: "+truncate(c.status.LastError, 300))
 	case c.failures == 0 && c.failAlerted:
 		c.failAlerted = false
-		c.cfg.Alert("controller: recovered, the last cycle succeeded")
+		c.pending = append(c.pending, "controller: recovered, the last cycle succeeded")
 	}
 }
 
@@ -308,21 +331,26 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-func (c *Controller) reap(ctx context.Context, r reconcile.Reap) error {
+// reap removes the service (and its runner first); deleted is false when the runner turned busy
+// and the service was kept.
+func (c *Controller) reap(ctx context.Context, r reconcile.Reap) (deleted bool, err error) {
 	if r.RunnerID != 0 {
 		sc := scopeByKey(c.cfg.Scopes, r.Scope)
 		if err := c.gh.DeleteRunner(ctx, sc, r.RunnerID); err != nil {
 			if errors.Is(err, ghapp.ErrBusy) && !r.Force {
 				c.cfg.Log.Info("runner turned busy; kept", "service", r.Service.Name)
-				return nil
+				return false, nil
 			}
 			if !errors.Is(err, ghapp.ErrBusy) {
-				return fmt.Errorf("delete runner %s: %w", r.Service.Name, err)
+				return false, fmt.Errorf("delete runner %s: %w", r.Service.Name, err)
 			}
 		}
 	}
 	c.cfg.Log.Info("reaping", "service", r.Service.Name, "reason", r.Reason)
-	return c.rw.Delete(ctx, r.Service.ID)
+	if err := c.rw.Delete(ctx, r.Service.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Controller) create(ctx context.Context, s reconcile.Scope) error {
@@ -368,7 +396,7 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 				continue
 			}
 			c.alerted[j.ID] = key
-			c.cfg.Alert(fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
+			c.pending = append(c.pending, fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
 		}
 	}
 	for id, key := range c.alerted {
@@ -431,4 +459,16 @@ func (c *Controller) warnLowLimits() {
 		c.lowWarn[account] = l.Reset
 		c.cfg.Log.Warn("github rate limit low", "account", account, "remaining", l.Remaining, "limit", l.Limit, "reset", l.Reset)
 	}
+}
+
+// CallCounter is the optional part of GH and RW that counts the API calls made so far.
+type CallCounter interface {
+	Calls() int64
+}
+
+func calls(x any) int64 {
+	if cc, ok := x.(CallCounter); ok {
+		return cc.Calls()
+	}
+	return 0
 }
