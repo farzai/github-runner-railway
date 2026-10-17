@@ -5,7 +5,9 @@
 #   docker build --platform linux/amd64 -t ghcr.io/<you>/runner-derived:1 examples/derived
 #
 # The base is pinned by digest; files fetched directly (key, library, CLI, Node, bun) are checked
-# against a sha256; apt packages are pinned by version and verified by their signed repositories;
+# against a sha256; the Postgres client is pinned by version, and every apt package (including
+# libcurl and Playwright's --with-deps libraries, which take the current version) comes from a signed
+# repository;
 # pnpm and Playwright are pinned by version through npm, and Playwright fetches its own browsers.
 ARG BASE=ghcr.io/farzai/github-runner-railway:v0.1.0@sha256:992d69310adf6e7937f0a101f20f4991feb5f65a766654edfad8404239a14cc9
 FROM ${BASE}
