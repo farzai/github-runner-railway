@@ -17,24 +17,71 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
-  # Every push to main publishes the three images under the commit sha; a vX.Y.Z tag publishes the
-  # same builds under the version as well (runner :vX.Y.Z, Postgres variant :pg-vX.Y.Z, controller
-  # :vX.Y.Z). Images are named after the repository, so a fork publishes its own.
+  # Which images this push or pull request changes. The runner images are rebuilt only when
+  # image/ changes, the controller only when the Go code or its Dockerfile changes; this workflow
+  # changing, a version tag, or a push with no usable base rebuilds all three.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.diff.outputs.runner }}
+      controller: ${{ steps.diff.outputs.controller }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base="${BEFORE}"
+          if [ "${EVENT}" = pull_request ]; then base="${PR_BASE}"; fi
+          if [ "${REF_TYPE}" = tag ] || [ -z "${base}" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "runner=true" >>"$GITHUB_OUTPUT"; echo "controller=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          files="$(git diff --name-only "${base}" HEAD)"
+          echo "${files}"
+          all=false
+          if echo "${files}" | grep -qx '.github/workflows/ci.yml'; then all=true; fi
+          runner=false; controller=false
+          if [ "${all}" = true ] || echo "${files}" | grep -q '^image/'; then runner=true; fi
+          if [ "${all}" = true ] || echo "${files}" | grep -qE '^(cmd/|internal/|go\.mod$|go\.sum$|Dockerfile$|\.dockerignore$)'; then controller=true; fi
+          echo "runner=${runner}" >>"$GITHUB_OUTPUT"
+          echo "controller=${controller}" >>"$GITHUB_OUTPUT"
+
+  # Images are named after the repository, so a fork publishes its own. A push to main publishes
+  # the sha tag; a vX.Y.Z tag also publishes runner :vX.Y.Z, :pg-vX.Y.Z and controller :vX.Y.Z.
+  # Layers are cached per target, so an unchanged stage keeps its layer digests.
   images:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, changes]
     permissions:
       contents: read
       packages: write
     strategy:
       matrix:
         include:
-          - {name: runner, context: image, target: base, image: '', prefix: ''}
-          - {name: runner-pg, context: image, target: pg, image: '', prefix: 'pg-'}
-          - {name: controller, context: ., target: '', image: '-controller', prefix: ''}
+          - {name: runner, kind: runner, context: image, target: base, image: '', prefix: ''}
+          - {name: runner-pg, kind: runner, context: image, target: pg, image: '', prefix: 'pg-'}
+          - {name: controller, kind: controller, context: ., target: '', image: '-controller', prefix: ''}
     steps:
+      - id: want
+        env:
+          RUNNER: ${{ needs.changes.outputs.runner }}
+          CONTROLLER: ${{ needs.changes.outputs.controller }}
+          KIND: ${{ matrix.kind }}
+        run: |
+          if { [ "${KIND}" = runner ] && [ "${RUNNER}" = true ]; } || { [ "${KIND}" = controller ] && [ "${CONTROLLER}" = true ]; }; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "build=false" >>"$GITHUB_OUTPUT"; echo "unchanged: ${KIND} image not rebuilt"
+          fi
       - uses: actions/checkout@v4
+        if: steps.want.outputs.build == 'true'
       - id: tags
+        if: steps.want.outputs.build == 'true'
         env:
           REPO: ${{ github.repository }}
           SUFFIX: ${{ matrix.image }}
@@ -51,16 +98,25 @@ jobs:
             echo "EOF"
           } >>"$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
+        if: steps.want.outputs.build == 'true'
       - uses: docker/login-action@v3
-        if: github.event_name == 'push'
+        if: steps.want.outputs.build == 'true' && github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
+        if: steps.want.outputs.build == 'true'
         with:
           context: ${{ matrix.context }}
           target: ${{ matrix.target }}
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.tags.outputs.tags }}
+          # the pg stage builds on base, so it also reads the base image's cache
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}
+            type=gha,scope=runner
+          # only pushes write the cache: a pull request's cache is not readable from main and would
+          # only use up the repository's cache space
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}

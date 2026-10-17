@@ -95,6 +95,17 @@ Pin both images to a release (`:vX.Y.Z`, `:pg-vX.Y.Z`) or a digest. To upgrade, 
 `RUNNER_IMAGE` and the controller's image to the new version and redeploy the controller; runners
 already running finish on the old image. Read CHANGELOG.md for anything that needs a new variable.
 
+## Which image tag is current
+
+A push to `main` rebuilds the runner images only when `image/` changed, and the controller image only
+when the Go code or its Dockerfile changed, so not every commit has every sha tag. The newest runner
+image is the sha of the last commit that touched `image/` (`git log -1 --format=%H -- image/`), and
+the newest controller image the last commit that touched `cmd/`, `internal/`, `go.mod` or
+`Dockerfile`. A commit that changes only `ci.yml` rebuilds and tags all three. If an image build failed or was
+cancelled and the next push did not touch that image's sources, that sha has no image: check the tag
+exists (`docker manifest inspect ghcr.io/<owner>/<repo>:<sha>`) and re-run the failed workflow run if
+not. Releases (`vX.Y.Z` tags) always publish all three; prefer those to sha tags.
+
 ## Rate limits and costs
 
 Railway allows 1,000 API requests an hour per token: a job costs about four calls and a cycle one.

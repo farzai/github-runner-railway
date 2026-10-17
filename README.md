@@ -208,7 +208,7 @@ Releases are tagged `vX.Y.Z` (see [CHANGELOG.md](CHANGELOG.md)) and publish:
 * `ghcr.io/farzai/github-runner-railway:vX.Y.Z` and `:pg-vX.Y.Z`
 * `ghcr.io/farzai/github-runner-railway-controller:vX.Y.Z`
 
-Every commit on `main` also publishes the same images under the commit sha. There is no `latest`:
+Commits on `main` also publish images under the commit sha, but only for the images they change (docs/deploy.md says which sha is current). There is no `latest`:
 pin a version (or a digest, `image@sha256:...`) so a runner never changes under you.
 
 ## Troubleshooting
