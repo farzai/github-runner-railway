@@ -134,3 +134,45 @@ jobs:
           context: examples/derived
           platforms: linux/amd64
           push: false
+
+  # Builds the pg target for the default major and for another major with an extension, and runs
+  # image/smoke-pg.sh in each as the runner user (ci-postgres start, the major, CREATE EXTENSION).
+  # Not pushed: these are checks of the build args, not published variants.
+  pg-variants:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {major: '18', version: '', extensions: '', check: ''}
+          - {major: '16', version: '16.15-1.pgdg24.04+2', extensions: 'postgresql-16-partman=5.5.0-1.pgdg24.04+1', check: 'pg_partman'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: args
+        env:
+          MAJOR: ${{ matrix.major }}
+          VERSION: ${{ matrix.version }}
+          EXTENSIONS: ${{ matrix.extensions }}
+        run: |
+          {
+            echo "build-args<<EOF"
+            if [ -n "${VERSION}" ]; then echo "PG_MAJOR=${MAJOR}"; echo "PG_VERSION=${VERSION}"; fi
+            if [ -n "${EXTENSIONS}" ]; then echo "PG_EXTENSIONS=${EXTENSIONS}"; fi
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: image
+          target: pg
+          platforms: linux/amd64
+          load: true
+          tags: runner-pg-smoke:${{ matrix.major }}
+          build-args: ${{ steps.args.outputs.build-args }}
+      - name: Smoke test
+        env:
+          MAJOR: ${{ matrix.major }}
+          CHECK: ${{ matrix.check }}
+        run: |
+          # shellcheck disable=SC2086 # CHECK is a space-separated list of extensions
+          docker run --rm -v "$PWD/image/smoke-pg.sh:/tmp/smoke-pg.sh:ro" --entrypoint bash \
+            "runner-pg-smoke:${MAJOR}" /tmp/smoke-pg.sh "${MAJOR}" ${CHECK}
