@@ -198,8 +198,11 @@ You can also build your own image from `image/Dockerfile` (keep the `entrypoint.
 
 Railway bills the CPU, memory and network the runner services actually use, plus a little for the
 controller, which idles most of the time. A job costs roughly its duration times the CPU and memory it
-uses; check your plan's prices. Set a usage limit on the runner project so a runaway queue cannot run
-up a bill.
+uses; check your plan's prices. Keep `MAX_RUNNERS` and `MAX_JOB_MINUTES` as the real cap on spend.
+Railway's usage limits are set per **workspace**, not per project, and reaching the hard limit takes
+*every* workload in the workspace offline (Railway docs, usage limits, read 2026-10-17). Set a soft
+limit (an email alert) for the runner fleet, and a hard limit only if the workspace holds nothing
+else you need running.
 
 ## Versions
 

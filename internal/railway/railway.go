@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -97,6 +98,10 @@ func scrub(err error, token string) error {
 
 const listQuery = `query($p:String!){project(id:$p){services{edges{node{id name createdAt serviceInstances{edges{node{environmentId latestDeployment{status}}}}}}}}}`
 
+// runnerName is what follows the prefix in a runner service's name: the scope hash and a random
+// part, six lowercase hex digits each (controller.create).
+var runnerName = regexp.MustCompile(`^[0-9a-f]{6}-[0-9a-f]{6}$`)
+
 // List is our runner services (by name prefix) with whether their container has ended.
 func (c *Client) List(ctx context.Context) ([]reconcile.Service, error) {
 	var d struct {
@@ -128,13 +133,13 @@ func (c *Client) List(ctx context.Context) ([]reconcile.Service, error) {
 	var out []reconcile.Service
 	for _, e := range d.Project.Services.Edges {
 		n := e.Node
-		if !strings.HasPrefix(n.Name, c.cfg.Prefix) {
+		// only the exact names the controller makes: a shared service that merely starts with the
+		// prefix (rr-postgres) must never be listed, counted or deleted
+		rest, ok := strings.CutPrefix(n.Name, c.cfg.Prefix)
+		if !ok || !runnerName.MatchString(rest) {
 			continue
 		}
-		s := reconcile.Service{ID: n.ID, Name: n.Name, CreatedAt: n.CreatedAt}
-		if rest := strings.TrimPrefix(n.Name, c.cfg.Prefix); len(rest) >= 6 {
-			s.ScopeHash = rest[:6]
-		}
+		s := reconcile.Service{ID: n.ID, Name: n.Name, CreatedAt: n.CreatedAt, ScopeHash: rest[:6]}
 		for _, in := range n.ServiceInstances.Edges {
 			if in.Node.EnvironmentID == c.cfg.EnvironmentID && in.Node.LatestDeployment != nil {
 				switch in.Node.LatestDeployment.Status {

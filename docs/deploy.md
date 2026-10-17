@@ -108,5 +108,48 @@ not. Releases (`vX.Y.Z` tags) always publish all three; prefer those to sha tags
 
 ## Rate limits and costs
 
-Railway allows 1,000 API requests an hour per token: a job costs about four calls and a cycle one.
-Set a Railway usage limit on the runner project and on the controller project.
+See "Sizing" below. Railway's usage limits are set per **workspace**, not per project, and reaching the hard limit takes
+*every* workload in the workspace offline (Railway docs, usage limits, read 2026-10-17). Set a soft
+limit (an email alert) for the runner fleet, and a hard limit only if the workspace holds nothing
+else you need running.
+
+## Sharing the runner project with long-lived services
+
+Runners can run in a project next to services that stay up, such as a shared CI database or a cache,
+and reach them over the private network (`<service>.railway.internal`). The controller lists, counts
+and deletes only services whose names are exactly `<RUNNER_SERVICE_PREFIX><6 hex>-<6 hex>`, the names
+it makes; any other service, including one that starts with the prefix (`rr-postgres`), is never
+touched (tested in `internal/railway`). Still:
+
+* Pick a prefix no other service in the project uses, and give each controller its own.
+* Everything a job runs can reach those services, and any concurrent job can too: use this only for
+  private repositories of one trust level, and give the shared services their own credentials.
+* A shared database is state that outlives jobs: tests must clean up after themselves or use their
+  own database or schema per job. The `pg` and `redis` images give each job its own server instead,
+  with nothing shared, at the cost of a few seconds of start-up per job.
+* The controller itself must still run in a different project (it holds the App key and the token).
+
+## Sizing
+
+* **`MAX_RUNNERS`**: the most jobs you want running at once: for one repository, its widest matrix
+  times the workflows that can run together; for several, the sum at your busiest hour. Each runner
+  is a container with its own CPU and memory, so this is also your spend cap. Watch `queued` in
+  `/healthz` and the `cycle` log line: jobs that wait while `services` equals `MAX_RUNNERS` mean the
+  cap is too low.
+* **`MAX_CREATE_PER_CYCLE`**: how many runners one cycle may start, about the size of a burst (one
+  push's matrix). Higher starts a burst faster but spends more Railway calls at once.
+* **Railway API**: per token, by plan: 100 requests an hour (Free), 1,000 (Hobby), 10,000 (Pro), plus
+  10 (Hobby) or 50 (Pro) a second (Railway docs, public API, read 2026-10-17). The limit actually
+  applied is in the `X-RateLimit-Limit` header of every answer; a Pro workspace was observed at 1,000 an
+  hour for project tokens on 2026-10-17, so plan for the header, not the table. A job costs about four
+  calls (create, configure, deploy, delete) and every cycle one list call; controllers that share a
+  token share its budget. At 1,000 an hour and the default poll that is roughly 230 jobs an hour.
+* **GitHub API**: 5,000 requests an hour per installation (more above 20 repositories), shared by
+  every scope of that installation. A cycle reads, per repository, two run lists, the jobs of each
+  active run and the runner list; unchanged lists come back as `304` and do not count. `/healthz`
+  shows `github_rate_limits`, and a warning is logged below a tenth.
+* **Railway per-service limits** (Railway docs, plans, read 2026-10-17): up to 48 vCPU and 48 GB per
+  service on Hobby, 1,000 vCPU and 1 TB on Pro, 100 GB ephemeral storage, image size 100 GB on Hobby.
+  A runner service gets the workspace's default per-service limit (observed: 24 vCPU, 24 GB and a
+  limit of about 1,000 processes and threads, 2026-10-17). Railway documents no limit on services per
+  project; a fleet of a few dozen short-lived services at once has worked.

@@ -1,0 +1,5 @@
+--- FAIL: TestOnlyExactRunnerNamesAreListedSoSharedServicesAreNeverTouched (0.00s)
+    railway_test.go:170: listed [{ID:0 Name:rr-abc123-0a1b2c ScopeHash:abc123 CreatedAt:2026-10-17 11:00:00 +0000 UTC Exited:false} {ID:1 Name:rr-postgres ScopeHash:postgr CreatedAt:2026-10-17 11:00:00 +0000 UTC Exited:false} {ID:2 Name:rr-redis ScopeHash: CreatedAt:2026-10-17 11:00:00 +0000 UTC Exi
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/railway	0.489s
+FAIL
