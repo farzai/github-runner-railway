@@ -72,15 +72,22 @@ RUN curl -fsSL -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.a
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       "postgresql-${PG_MAJOR}=${PG_VERSION}" "postgresql-client-${PG_MAJOR}=${PG_VERSION}" \
  && rm -f /tmp/pgdg.asc
-# Playwright's own list of system libraries for Chromium and WebKit, installed with a pinned Node
-# and Playwright that are removed again: jobs bring their own Node (actions/setup-node) and
-# download the browsers themselves (`playwright install`).
+# Playwright's own list of system libraries for Chromium and WebKit, and its browsers, installed
+# with a pinned Node and Playwright that are removed again: jobs bring their own Node
+# (actions/setup-node).
 RUN curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - \
  && install -d /tmp/node && tar -xJf /tmp/node.tar.xz -C /tmp/node --strip-components=1 \
  && PATH="/tmp/node/bin:${PATH}" DEBIAN_FRONTEND=noninteractive \
       /tmp/node/bin/npx --yes "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium webkit \
+ && PATH="/tmp/node/bin:${PATH}" PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+      /tmp/node/bin/npx --yes "playwright@${PLAYWRIGHT_VERSION}" install chromium webkit ffmpeg \
+ && chown -R runner:runner /ms-playwright \
  && rm -rf /tmp/node /tmp/node.tar.xz /root/.npm /var/lib/apt/lists/*
+# The browsers of that Playwright version are baked in, so a job's `playwright install chromium
+# webkit` finds them and downloads nothing. The directory belongs to the runner user: a job whose
+# Playwright is newer than the image still downloads its own browsers there (one container, one job).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY ci-postgres /usr/local/bin/ci-postgres
 RUN chmod 0755 /usr/local/bin/ci-postgres \
  && ln -s "/usr/lib/postgresql/${PG_MAJOR}/bin/initdb" /usr/local/bin/initdb \
