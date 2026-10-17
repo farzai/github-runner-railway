@@ -122,7 +122,12 @@ func (c *Controller) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-c.wake:
-			time.Sleep(c.cfg.MinGap) // let a burst of events land in one cycle, and bound the scan rate
+			// let a burst of events land in one cycle, and bound the scan rate
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(c.cfg.MinGap):
+			}
 		}
 	}
 }

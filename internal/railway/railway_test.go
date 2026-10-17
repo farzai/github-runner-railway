@@ -135,3 +135,11 @@ func TestARedirectIsNotFollowedAndTheTokenGoesNowhereElse(t *testing.T) {
 		t.Errorf("err %v hits %d: the Project-Access-Token must not follow a redirect", err, hits)
 	}
 }
+
+func TestRailwayLeavesACallerSuppliedClientAlone(t *testing.T) {
+	shared := &http.Client{}
+	New(Config{HTTP: shared})
+	if shared.CheckRedirect != nil {
+		t.Error("New changed the client it was given")
+	}
+}

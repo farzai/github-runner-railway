@@ -84,7 +84,10 @@ func New(cfg Config) (*Client, error) {
 		cfg.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
 	// A redirect would carry the Authorization header to wherever it points: never follow one.
-	cfg.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// (on a copy: the caller's client, maybe http.DefaultClient, is not ours to change)
+	hc := *cfg.HTTP
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	cfg.HTTP = &hc
 	return &Client{cfg: cfg, key: key, toks: map[string]token{}}, nil
 }
 
@@ -224,7 +227,7 @@ func (c *Client) JITConfig(ctx context.Context, s reconcile.Scope, name string) 
 	if s.Kind == "org" && c.cfg.RunnerGroupID > 0 {
 		group = c.cfg.RunnerGroupID
 	}
-	body := map[string]any{"name": name, "runner_group_id": group, "labels": []string{"self-hosted", c.cfg.Label}, "work_folder": "_work"}
+	body := map[string]any{"name": name, "runner_group_id": group, "labels": []string{"self-hosted", "linux", "x64", c.cfg.Label}, "work_folder": "_work"}
 	var out struct {
 		Runner struct {
 			ID int64 `json:"id"`

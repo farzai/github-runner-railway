@@ -136,7 +136,7 @@ func TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken(t *testin
 		Labels        []string `json:"labels"`
 	}
 	json.Unmarshal([]byte(f.bodies[last]), &body)
-	if body.Name != "rr-abc-1" || body.RunnerGroupID != 7 || strings.Join(body.Labels, ",") != "self-hosted,railway-farzai" {
+	if body.Name != "rr-abc-1" || body.RunnerGroupID != 7 || strings.Join(body.Labels, ",") != "self-hosted,linux,x64,railway-farzai" {
 		t.Errorf("body %+v", body)
 	}
 }
@@ -360,5 +360,16 @@ func TestRedirectsAreNeverFollowedSoNoCredentialTravelsWithOne(t *testing.T) {
 	_, err := newGH(t, f).Runners(context.Background(), org)
 	if err == nil || hits != 0 {
 		t.Errorf("err %v hits %d: the redirect must not be followed", err, hits)
+	}
+}
+
+func TestACallerSuppliedClientIsNotChanged(t *testing.T) {
+	pemKey, _ := testKey(t)
+	shared := &http.Client{}
+	if _, err := New(Config{AppID: "1", PrivateKey: pemKey, Label: "l", HTTP: shared}); err != nil {
+		t.Fatal(err)
+	}
+	if shared.CheckRedirect != nil {
+		t.Error("New changed the client it was given (it could be http.DefaultClient)")
 	}
 }

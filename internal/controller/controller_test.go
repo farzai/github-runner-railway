@@ -232,3 +232,21 @@ func TestAnUnreadableScopeKeepsItsAlertMarksSoAlertsDoNotRepeat(t *testing.T) {
 		t.Errorf("alerts %v, want one: a cycle that could not read GitHub must not forget what it already alerted", alerts)
 	}
 }
+
+func TestRunStopsWhileWaitingOutTheGapWhenTheContextEnds(t *testing.T) {
+	c := newC(&fakeGH{}, &fakeRW{})
+	c.cfg.MinGap = time.Hour
+	c.cfg.Interval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	c.Nudge()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop on cancel while sleeping the gap")
+	}
+}

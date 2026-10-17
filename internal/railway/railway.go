@@ -45,7 +45,10 @@ func New(cfg Config) *Client {
 		cfg.HTTP = &http.Client{Timeout: 30 * time.Second}
 	}
 	// the token must go only where it was pointed: never follow a redirect
-	cfg.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// (on a copy: the caller's client, maybe http.DefaultClient, is not ours to change)
+	hc := *cfg.HTTP
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	cfg.HTTP = &hc
 	return &Client{cfg: cfg}
 }
 

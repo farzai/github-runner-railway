@@ -21,3 +21,17 @@ FAIL	github.com/farzai/github-runner-railway/internal/config	0.340s
 FAIL
 FAIL	github.com/farzai/github-runner-railway/internal/railway	0.398s
 FAIL
+ok  	github.com/farzai/github-runner-railway/internal/config	(cached)
+--- FAIL: TestRunStopsWhileWaitingOutTheGapWhenTheContextEnds (2.12s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	2.523s
+--- FAIL: TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken (0.06s)
+--- FAIL: TestACallerSuppliedClientIsNotChanged (0.08s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/ghapp	3.164s
+--- FAIL: TestRailwayLeavesACallerSuppliedClientAlone (0.00s)
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/railway	0.472s
+ok  	github.com/farzai/github-runner-railway/internal/reconcile	(cached)
+ok  	github.com/farzai/github-runner-railway/internal/webhook	(cached)
+FAIL
