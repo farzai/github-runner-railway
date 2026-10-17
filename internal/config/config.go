@@ -122,6 +122,9 @@ func Load(get func(string) string) (Config, error) {
 	if !servicePrefix.MatchString(c.ServicePrefix) {
 		return Config{}, fmt.Errorf("config: RUNNER_SERVICE_PREFIX must be two lowercase letters or digits (the first a letter) and a dash, e.g. rp-")
 	}
+	if c.FailAlertAfter < 1 {
+		return Config{}, fmt.Errorf("config: ALERT_FAILED_CYCLES must be at least 1")
+	}
 	if c.MaxRunners < 1 || c.MaxCreatePerCycle < 1 || c.Interval < 10*time.Second {
 		return Config{}, fmt.Errorf("config: MAX_RUNNERS and MAX_CREATE_PER_CYCLE must be at least 1 and POLL_SECONDS at least 10")
 	}
