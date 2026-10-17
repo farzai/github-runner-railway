@@ -140,7 +140,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller in the same runner project needs its own (a letter, a letter or digit, a dash, e.g. `rp-`) | `rr-` |
 | `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an `org:` scope, and the Default group (1) is refused | none |
 | `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | services in all / created in one cycle | `8` / `4` |
-| `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner, at least 20 s after the last) | `120` |
+| `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner: after a 3 s debounce, and at least 20 s after the previous cycle started) | `120` |
 | `STARTUP_GRACE_SECONDS` | how long a registered runner may stay offline before its service is removed | `300` |
 | `IDLE_TTL_SECONDS` | how long a surplus idle runner is kept | `120` |
 | `MAX_JOB_MINUTES` | job timeout; a service older than this plus 10 minutes is removed | `360` |
