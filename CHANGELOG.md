@@ -11,10 +11,6 @@ the major version is 0, a minor release may change configuration (each such chan
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.
 
 ### Added
-- Opt-in `sudo` image variant (`:sudo-<sha>`, `:sudo-vX.Y.Z`): the base image plus passwordless sudo for the runner user, for private repositories only.
-- `examples/derived/Dockerfile`: a derived image with a Postgres client, libcurl headers, a shared library, a pinned CLI, Node 22 with pnpm and bun, and Playwright browsers; CI builds it.
-
-### Added
 - `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
 
 ### Fixed
