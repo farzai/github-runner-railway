@@ -1,0 +1,7 @@
+# Keeps the SHA-pinned actions current: Dependabot proposes the new commit with its version comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
