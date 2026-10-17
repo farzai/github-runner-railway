@@ -54,13 +54,27 @@ Settings, Tokens) and note the project id and environment id.
 
 ### 2. The GitHub App
 
-Create it from the manifest in [`docs/github-app-manifest.json`](docs/github-app-manifest.json)
-(GitHub's [app manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)),
-or by hand with exactly these settings:
+Create it by hand with exactly the settings below, or from the manifest in
+[`docs/github-app-manifest.json`](docs/github-app-manifest.json) with GitHub's
+[app manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest):
+
+1. Edit the manifest: a unique `name`, your controller's webhook URL in `hook_attributes.url`, and a
+   `redirect_url` you control. If you serve only `repo:` scopes, delete
+   `organization_self_hosted_runners`.
+2. Submit it as the `manifest` field of an HTML form POST to
+   `https://github.com/settings/apps/new` (personal account) or
+   `https://github.com/organizations/<org>/settings/apps/new`, and confirm on GitHub.
+3. GitHub redirects to `redirect_url?code=<code>`. Within an hour, exchange the code:
+   `curl -X POST https://api.github.com/app-manifests/<code>/conversions`. The answer holds the App
+   `id`, the private key (`pem`) and the `webhook_secret`: put them straight into the controller's
+   variables and do not keep them anywhere else.
+
+The settings:
 
 * Repository permissions: **Administration: Read and write** (to create and delete repository
   runners), **Actions: Read**, **Metadata: Read**.
-* Organization permissions: **Self-hosted runners: Read and write** (only for `org:` scopes).
+* Organization permissions: **Self-hosted runners: Read and write** (only for `org:` scopes; leave it
+  out if you serve only `repo:` scopes).
 * Subscribe to the **Workflow job** event. Webhook URL: `https://<controller domain>/webhook`, with a
   webhook secret you generate.
 
