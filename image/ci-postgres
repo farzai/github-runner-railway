@@ -1,0 +1,53 @@
+#!/bin/bash
+# A PostgreSQL server for one job, inside the job's own container (the Postgres runner variant).
+#
+#   ci-postgres start [user] [password] [database]
+#       initdb a fresh cluster under $RUNNER_TEMP, start it on 127.0.0.1 only on a free port,
+#       wait until it answers, and append CI_POSTGRES_URL, CI_POSTGRES_PORT and CI_POSTGRES_DATA
+#       to $GITHUB_ENV (and print the URL). Defaults: ci / ci / ci.
+#   ci-postgres stop
+#       stop the server named in CI_POSTGRES_DATA (the container ends with the job anyway).
+#
+# The server listens on loopback only: runner containers share a Railway private network.
+set -euo pipefail
+
+start() {
+  local user="${1:-ci}" password="${2:-ci}" db="${3:-ci}"
+  local base="${RUNNER_TEMP:-/tmp}/ci-postgres"
+  local data="${base}/data"
+  rm -rf "${base}" && mkdir -p "${base}"
+  local pwfile="${base}/pw"
+  printf '%s' "${password}" >"${pwfile}"
+  initdb --pgdata "${data}" --username "${user}" --pwfile "${pwfile}" --auth-host scram-sha-256 \
+    --auth-local trust --encoding UTF8 --no-locale >"${base}/initdb.log" 2>&1 || {
+    cat "${base}/initdb.log" >&2; return 1; }
+  rm -f "${pwfile}"
+  local port
+  port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  pg_ctl --pgdata "${data}" --log "${base}/server.log" --wait --timeout 60 \
+    -o "-c listen_addresses=127.0.0.1 -c port=${port} -c unix_socket_directories=${base} -c dynamic_shared_memory_type=mmap -c fsync=off -c synchronous_commit=off -c full_page_writes=off" \
+    start >/dev/null || { cat "${base}/server.log" >&2; return 1; }
+  psql --host "${base}" --port "${port}" --username "${user}" --dbname postgres --quiet \
+    --command "CREATE DATABASE \"${db}\"" >/dev/null
+  local url="postgres://${user}:${password}@127.0.0.1:${port}/${db}"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    { echo "CI_POSTGRES_URL=${url}"; echo "CI_POSTGRES_PORT=${port}"; echo "CI_POSTGRES_DATA=${data}"; } >>"${GITHUB_ENV}"
+  fi
+  echo "${url}"
+}
+
+stop() {
+  local data="${CI_POSTGRES_DATA:-${RUNNER_TEMP:-/tmp}/ci-postgres/data}"
+  if [[ -f "${data}/postmaster.pid" ]]; then
+    pg_ctl --pgdata "${data}" --mode fast --wait stop >/dev/null
+    echo "stopped"
+  else
+    echo "no server running"
+  fi
+}
+
+case "${1:-}" in
+  start) shift; start "$@" ;;
+  stop) stop ;;
+  *) echo "usage: ci-postgres start [user] [password] [database] | stop" >&2; exit 2 ;;
+esac

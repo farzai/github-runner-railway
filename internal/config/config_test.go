@@ -118,3 +118,25 @@ func TestTheControllerRefusesToManageTheProjectItRunsIn(t *testing.T) {
 		t.Errorf("err %v: runner services created beside the controller share its private network", err)
 	}
 }
+
+// A second controller (another label and image, e.g. the Postgres variant) shares the runner
+// project, so each lists and reaps only services under its own name prefix. The default keeps the
+// first controller's "rr-"; a prefix must be short lowercase letters or digits ending in "-", so
+// it is a safe Railway service name and one prefix can never start another ("rr-" vs "rr-pg-").
+func TestTheServicePrefixDefaultsToRrAndIsValidated(t *testing.T) {
+	c, err := Load(env(base()))
+	if err != nil || c.ServicePrefix != "rr-" {
+		t.Fatalf("default prefix %q err %v, want rr-", c.ServicePrefix, err)
+	}
+	m := base()
+	m["RUNNER_SERVICE_PREFIX"] = "rp-"
+	if c, err := Load(env(m)); err != nil || c.ServicePrefix != "rp-" {
+		t.Fatalf("prefix %q err %v, want rp-", c.ServicePrefix, err)
+	}
+	for _, bad := range []string{"rp", "RP-", "rr-pg-", "r-p-", "toolong-", "-", "r p-"} {
+		m["RUNNER_SERVICE_PREFIX"] = bad
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "RUNNER_SERVICE_PREFIX") {
+			t.Errorf("prefix %q: err %v, want a RUNNER_SERVICE_PREFIX error", bad, err)
+		}
+	}
+}

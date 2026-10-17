@@ -45,6 +45,35 @@ skyabove) and no Docker at all, because the runners have no Docker daemon: no `d
 Docker-based action, no `docker` step, no job `container:` and no `services:` (Polity's Postgres needs a
 runner image variant instead).
 
+### The Postgres pool (`railway-private-pg`)
+
+Jobs that need PostgreSQL or Playwright's browsers (Polity's check, e2e and webkit-replay) use a second
+pool: a second controller service, `controller-pg`, in the Runner Controller project, with the image
+variant `ghcr.io/farzai/github-runner-railway:pg-<commit sha>` (target `pg` of `image/Dockerfile`:
+PostgreSQL 18 and the system libraries of Playwright's Chromium and WebKit, versions pinned there).
+
+| Variable | Value |
+| --- | --- |
+| `RUNNER_LABEL` | `railway-private-pg` |
+| `RUNNER_SERVICE_PREFIX` | `rp-` (the first controller keeps `rr-`; each lists and reaps only its own services) |
+| `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:pg-<commit sha>` |
+| `RUNNER_SCOPES` | only the repositories that need it, e.g. `repo:farzai/polity.farzai.com` |
+| `POLL_SECONDS` | `60`: the App's one webhook URL goes to the first controller, so this one polls |
+| everything else | as the first controller (same App, same runner project and token) |
+
+A job in this pool starts its own server, which lives and dies with the job's container:
+
+```yaml
+runs-on: [self-hosted, railway-private-pg]
+steps:
+  - run: ci-postgres start polity polity polity_test   # user, password, database; writes CI_POSTGRES_URL to GITHUB_ENV
+  - run: pnpm test                                      # read the URL from CI_POSTGRES_URL
+```
+
+The server listens on 127.0.0.1 only (runner containers share a private network) on a free port, with
+fsync off: it is a throwaway test database. `ci-postgres stop` exists for symmetry; the container ends
+with the job anyway. The browsers themselves still come from `playwright install` in the job.
+
 ## Before a controller can start (owner)
 
 1. **The GitHub App** (permissions in the README; installed on the selected repositories only; subscribe to

@@ -31,7 +31,7 @@ func main() {
 		log.Error("startup", "err", err.Error())
 		os.Exit(1)
 	}
-	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Image: cfg.Image, Prefix: "rr-"})
+	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Image: cfg.Image, Prefix: cfg.ServicePrefix})
 	alert := func(msg string) {
 		log.Error("ALERT", "msg", msg)
 		if cfg.AlertURL == "" {
@@ -43,7 +43,7 @@ func main() {
 		}
 	}
 	c := controller.New(controller.Config{
-		Scopes: cfg.Scopes, Prefix: "rr-", MaxRunners: cfg.MaxRunners, MaxCreatePerCycle: cfg.MaxCreatePerCycle,
+		Scopes: cfg.Scopes, Prefix: cfg.ServicePrefix, MaxRunners: cfg.MaxRunners, MaxCreatePerCycle: cfg.MaxCreatePerCycle,
 		StartupGrace: cfg.StartupGrace, IdleTTL: cfg.IdleTTL, MaxAge: cfg.MaxAge, AlertAfter: cfg.AlertAfter,
 		Interval: cfg.Interval, Alert: alert, Log: log,
 	}, gh, rw)
