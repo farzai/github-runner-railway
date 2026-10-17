@@ -257,11 +257,14 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 			IdleTTL: c.cfg.IdleTTL, MaxAge: c.cfg.MaxAge, Scopes: readable},
 	})
 	for _, r := range plan.Reap {
-		if err := c.reap(ctx, r); err != nil {
+		deleted, err := c.reap(ctx, r)
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		reaped++
+		if deleted {
+			reaped++
+		}
 	}
 	createdBy := map[string]int{}
 	for _, cr := range plan.Create {
@@ -328,21 +331,26 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-func (c *Controller) reap(ctx context.Context, r reconcile.Reap) error {
+// reap removes the service (and its runner first); deleted is false when the runner turned busy
+// and the service was kept.
+func (c *Controller) reap(ctx context.Context, r reconcile.Reap) (deleted bool, err error) {
 	if r.RunnerID != 0 {
 		sc := scopeByKey(c.cfg.Scopes, r.Scope)
 		if err := c.gh.DeleteRunner(ctx, sc, r.RunnerID); err != nil {
 			if errors.Is(err, ghapp.ErrBusy) && !r.Force {
 				c.cfg.Log.Info("runner turned busy; kept", "service", r.Service.Name)
-				return nil
+				return false, nil
 			}
 			if !errors.Is(err, ghapp.ErrBusy) {
-				return fmt.Errorf("delete runner %s: %w", r.Service.Name, err)
+				return false, fmt.Errorf("delete runner %s: %w", r.Service.Name, err)
 			}
 		}
 	}
 	c.cfg.Log.Info("reaping", "service", r.Service.Name, "reason", r.Reason)
-	return c.rw.Delete(ctx, r.Service.ID)
+	if err := c.rw.Delete(ctx, r.Service.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Controller) create(ctx context.Context, s reconcile.Scope) error {

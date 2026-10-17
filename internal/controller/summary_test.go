@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/farzai/github-runner-railway/internal/ghapp"
 	"github.com/farzai/github-runner-railway/internal/reconcile"
@@ -47,5 +48,21 @@ func TestEveryCycleLogsOneSummaryLine(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("cycle line %q lacks %s", out, want)
 		}
+	}
+}
+
+// A reap that finds the runner busy keeps the service: it is not counted as reaped.
+func TestAKeptBusyRunnerIsNotCountedAsReaped(t *testing.T) {
+	gh := &fakeGH{runners: map[string][]reconcile.Runner{repo.Key(): {{ID: 7, Name: "rr-" + repo.Hash() + "-aaaaaa"}}}, busy: map[int64]bool{7: true}}
+	rw := &fakeRW{services: []reconcile.Service{{ID: "s1", Name: "rr-" + repo.Hash() + "-aaaaaa", ScopeHash: repo.Hash(), CreatedAt: now.Add(-time.Hour)}}}
+	var buf bytes.Buffer
+	c := newC(gh, rw)
+	c.cfg.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	_ = c.Cycle(context.Background())
+	if !strings.Contains(buf.String(), "runner turned busy; kept") {
+		t.Fatalf("log %q: the idle surplus runner should have been tried and found busy", buf.String())
+	}
+	if len(rw.deleted) != 0 || !strings.Contains(buf.String(), "reaped=0") {
+		t.Fatalf("deleted %v, log %q: want nothing deleted and reaped=0", rw.deleted, buf.String())
 	}
 }
