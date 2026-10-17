@@ -270,7 +270,7 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 			for _, r := range runners[key] {
 				registered = registered || r.Name == sv.Name
 			}
-			if !registered && now.Sub(sv.CreatedAt) <= c.cfg.StartupGrace {
+			if !registered && now.Sub(sv.CreatedAt) <= reconcile.RegisterLag {
 				coming++
 			}
 		}

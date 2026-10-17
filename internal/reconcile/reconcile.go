@@ -49,6 +49,10 @@ type Runner struct {
 	Offline bool // registered but not connected: a JIT runner is offline until its container starts
 }
 
+// RegisterLag is how long a new runner may take to show in GitHub's list after its JIT config was
+// made. A service older than this whose runner is not listed is finished.
+const RegisterLag = time.Minute
+
 // Params are the knobs.
 type Params struct {
 	MaxRunners        int
@@ -90,7 +94,7 @@ type Plan struct {
 //
 // A service is supply for its scope while it is starting (no runner yet, or one that is still
 // offline, inside the startup grace) or idle (registered, online, not busy). A busy runner is never touched, except past MaxAge,
-// and a service whose container ended or that never registered is dead and goes. An idle
+// and a service whose container ended or whose runner GitHub no longer lists is dead and goes. An idle
 // runner beyond the demand goes once it is older than IdleTTL, oldest first. New services
 // are created for the jobs supply does not cover, up to MaxRunners in all and
 // MaxCreatePerCycle in a cycle, one scope at a time in turn so none starves.
@@ -136,8 +140,11 @@ func Make(in Input) Plan {
 				rid = runner.ID
 			}
 			p.Reap = append(p.Reap, Reap{Service: sv, Scope: key, RunnerID: rid, Force: true, Reason: "past the job timeout"})
-		case runner == nil && age > in.Params.StartupGrace:
-			p.Reap = append(p.Reap, Reap{Service: sv, Scope: key, Reason: "never registered"})
+		case runner == nil && age > RegisterLag:
+			// the JIT runner was registered before the service was made, so one that GitHub no
+			// longer lists has run its job (or never connected); Railway keeps an exited container
+			// as SUCCESS, so this, not Exited, is how a finished service is seen
+			p.Reap = append(p.Reap, Reap{Service: sv, Scope: key, Reason: "runner gone"})
 		case runner != nil && runner.Busy:
 			alive++
 		case runner != nil && runner.Offline && age > in.Params.StartupGrace:
