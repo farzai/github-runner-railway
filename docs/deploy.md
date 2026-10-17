@@ -70,7 +70,7 @@ Do not deploy it before the App exists: without `GITHUB_APP_ID` it exits at star
 3. Raise `MAX_RUNNERS` and add scopes one at a time. Show a scale-up to N and back to none with no killed job.
 4. **Rollback:** flip the pilot's `runs-on` back to `ubuntu-latest`, stop the controller (scale the service
    to zero or delete it; `MAX_RUNNERS` cannot be 0), and delete any `rr-*` services left in
-   Runner Public (the controller's reaper removes strays past the job timeout anyway).
+   the pool's runner project (the controller's reaper removes strays past the job timeout anyway).
 
 ## Rate limits and costs
 
