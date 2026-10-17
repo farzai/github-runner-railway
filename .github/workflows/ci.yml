@@ -117,4 +117,6 @@ jobs:
           cache-from: |
             type=gha,scope=${{ matrix.name }}
             type=gha,scope=runner
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # only pushes write the cache: a pull request's cache is not readable from main and would
+          # only use up the repository's cache space
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
