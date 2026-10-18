@@ -31,7 +31,7 @@ func main() {
 		log.Error("startup", "err", err.Error())
 		os.Exit(1)
 	}
-	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Image: cfg.Image, Prefix: cfg.ServicePrefix})
+	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Image: cfg.Image, Prefix: cfg.ServicePrefix, Region: cfg.Region})
 	alert := func(msg string) {
 		log.Error("ALERT", "alert", msg) // not "msg": slog writes the message under that key
 		if cfg.AlertURL == "" {

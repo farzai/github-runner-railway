@@ -30,6 +30,7 @@ type Config struct {
 	EnvironmentID string
 	Image         string
 	Prefix        string // service names start with it, e.g. "rr-"
+	Region        string // Railway region of each runner, e.g. "us-east4-eqdc4a"; empty leaves it to Railway
 	HTTP          *http.Client
 }
 
@@ -174,8 +175,15 @@ func (c *Client) Create(ctx context.Context, name string, vars map[string]string
 		_ = c.Delete(ctx, id)
 		return "", err
 	}
+	// One replica. With a region, it is placed there through multiRegionConfig, the shape Railway
+	// records on the deployment; without one, Railway uses the workspace's preferred region.
+	instance := map[string]any{"restartPolicyType": "NEVER", "numReplicas": 1}
+	if c.cfg.Region != "" {
+		delete(instance, "numReplicas")
+		instance["multiRegionConfig"] = map[string]any{c.cfg.Region: map[string]any{"numReplicas": 1}}
+	}
 	if err := c.do(ctx, `mutation($s:String!,$e:String!,$i:ServiceInstanceUpdateInput!){serviceInstanceUpdate(serviceId:$s,environmentId:$e,input:$i)}`,
-		map[string]any{"s": id, "e": c.cfg.EnvironmentID, "i": map[string]any{"restartPolicyType": "NEVER", "numReplicas": 1}}, nil); err != nil {
+		map[string]any{"s": id, "e": c.cfg.EnvironmentID, "i": instance}, nil); err != nil {
 		return fail(err)
 	}
 	if err := c.do(ctx, `mutation($s:String!,$e:String!){serviceInstanceDeployV2(serviceId:$s,environmentId:$e)}`,
