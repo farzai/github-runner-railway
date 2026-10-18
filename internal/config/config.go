@@ -19,6 +19,7 @@ type Config struct {
 	RailwayProject, RailwayEnv       string
 	Image, Label                     string
 	ServicePrefix                    string // Railway service names of this controller's runners
+	Region                           string // Railway region of the runners; empty leaves it to Railway
 	Scopes                           []reconcile.Scope
 	RunnerGroupID                    int
 	MaxRunners, MaxCreatePerCycle    int
@@ -35,7 +36,7 @@ func (c Config) String() string {
 	for _, s := range c.Scopes {
 		keys = append(keys, s.Key())
 	}
-	return fmt.Sprintf("scopes=%s label=%s prefix=%s image=%s max=%d interval=%s", strings.Join(keys, ","), c.Label, c.ServicePrefix, c.Image, c.MaxRunners, c.Interval)
+	return fmt.Sprintf("scopes=%s label=%s prefix=%s region=%s image=%s max=%d interval=%s", strings.Join(keys, ","), c.Label, c.ServicePrefix, c.Region, c.Image, c.MaxRunners, c.Interval)
 }
 
 // Load reads and checks the environment through get.
@@ -98,6 +99,7 @@ func Load(get func(string) string) (Config, error) {
 	}
 	c.Label = str("RUNNER_LABEL", "railway")
 	c.ServicePrefix = str("RUNNER_SERVICE_PREFIX", "rr-")
+	c.Region = str("RUNNER_REGION", "")
 	c.Port = str("PORT", "8080")
 	c.AlertURL = strings.TrimSpace(get("ALERT_WEBHOOK_URL"))
 	c.RunnerGroupID = num("RUNNER_GROUP_ID", 0)
@@ -122,6 +124,11 @@ func Load(get func(string) string) (Config, error) {
 	if !servicePrefix.MatchString(c.ServicePrefix) {
 		return Config{}, fmt.Errorf("config: RUNNER_SERVICE_PREFIX must be two lowercase letters or digits (the first a letter) and a dash, e.g. rp-")
 	}
+	// A Railway region id, e.g. us-east4-eqdc4a. Railway itself refuses an unknown one when the
+	// first runner is created; this only catches what cannot be a region id at all.
+	if c.Region != "" && !region.MatchString(c.Region) {
+		return Config{}, fmt.Errorf("config: RUNNER_REGION must be a Railway region id of lowercase letters, digits and dashes, e.g. us-east4-eqdc4a")
+	}
 	if c.FailAlertAfter < 1 {
 		return Config{}, fmt.Errorf("config: ALERT_FAILED_CYCLES must be at least 1")
 	}
@@ -132,6 +139,8 @@ func Load(get func(string) string) (Config, error) {
 }
 
 var servicePrefix = regexp.MustCompile(`^[a-z][a-z0-9]-$`)
+
+var region = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
 func parseScope(s string) (reconcile.Scope, error) {
 	kind, rest, ok := strings.Cut(s, ":")

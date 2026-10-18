@@ -141,6 +141,29 @@ func TestTheServicePrefixDefaultsToRrAndIsValidated(t *testing.T) {
 	}
 }
 
+// RUNNER_REGION pins this controller's runners to one Railway region. Unset keeps today's
+// placement (the workspace's preferred region), so an existing controller is unchanged.
+func TestTheRunnerRegionIsOptionalAndValidated(t *testing.T) {
+	c, err := Load(env(base()))
+	if err != nil || c.Region != "" {
+		t.Fatalf("default region %q err %v, want empty", c.Region, err)
+	}
+	m := base()
+	m["RUNNER_REGION"] = " us-east4-eqdc4a "
+	if c, err := Load(env(m)); err != nil || c.Region != "us-east4-eqdc4a" {
+		t.Fatalf("region %q err %v, want us-east4-eqdc4a", c.Region, err)
+	}
+	if !strings.Contains(c.String(), "region=") {
+		t.Errorf("String() %q should name the region so a startup log shows where runners go", c.String())
+	}
+	for _, bad := range []string{"US-East", "us east", "us-east4/x", "-us", "us-"} {
+		m["RUNNER_REGION"] = bad
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "RUNNER_REGION") {
+			t.Errorf("region %q: err %v, want a RUNNER_REGION error", bad, err)
+		}
+	}
+}
+
 func TestFailedCyclesBeforeAnAlertDefaultsToThree(t *testing.T) {
 	c, err := Load(env(base()))
 	if err != nil || c.FailAlertAfter != 3 {

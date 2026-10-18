@@ -19,6 +19,11 @@ type call struct {
 
 func server(t *testing.T, reply func(c call) string) (*Client, *[]call, *http.Header) {
 	t.Helper()
+	return serverWith(t, Config{Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Image: "ghcr.io/acme/runner:1", Prefix: "rr-"}, reply)
+}
+
+func serverWith(t *testing.T, cfg Config, reply func(c call) string) (*Client, *[]call, *http.Header) {
+	t.Helper()
 	var calls []call
 	var hdr http.Header
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +38,8 @@ func server(t *testing.T, reply func(c call) string) (*Client, *[]call, *http.He
 		io.WriteString(w, reply(c))
 	}))
 	t.Cleanup(ts.Close)
-	return New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Image: "ghcr.io/acme/runner:1", Prefix: "rr-"}), &calls, &hdr
+	cfg.URL = ts.URL
+	return New(cfg), &calls, &hdr
 }
 
 func TestListReturnsOnlyOurServicesWithTheirState(t *testing.T) {
@@ -85,6 +91,55 @@ func TestCreateMakesTheServiceWithItsConfigThenDeploysOnce(t *testing.T) {
 	}
 	if !strings.Contains((*calls)[2].Query, "serviceInstanceDeployV2") {
 		t.Errorf("last call %q, want the deploy", (*calls)[2].Query)
+	}
+}
+
+// Without a region the configure input is what it always was: one replica, placed by Railway in
+// the workspace's preferred region.
+func TestCreateWithoutARegionLeavesPlacementToRailway(t *testing.T) {
+	c, calls, _ := server(t, func(c call) string {
+		if strings.Contains(c.Query, "serviceCreate") {
+			return `{"data":{"serviceCreate":{"id":"svc-9","name":"n"}}}`
+		}
+		return `{"data":{"ok":true}}`
+	})
+	if _, err := c.Create(context.Background(), "n", nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg := (*calls)[1].Vars["i"].(map[string]any)
+	if cfg["numReplicas"] != float64(1) {
+		t.Errorf("numReplicas %v, want 1", cfg["numReplicas"])
+	}
+	if _, ok := cfg["multiRegionConfig"]; ok {
+		t.Errorf("configure input %+v sets a region nobody asked for", cfg)
+	}
+}
+
+// With a region, the one replica is placed there through multiRegionConfig, the shape Railway
+// itself records on a deployment ({"<region>": {"numReplicas": 1}}).
+func TestCreatePlacesTheReplicaInTheConfiguredRegion(t *testing.T) {
+	c, calls, _ := serverWith(t, Config{Token: "t", ProjectID: "P", EnvironmentID: "E", Image: "i", Prefix: "rr-", Region: "us-east4-eqdc4a"}, func(c call) string {
+		if strings.Contains(c.Query, "serviceCreate") {
+			return `{"data":{"serviceCreate":{"id":"svc-9","name":"n"}}}`
+		}
+		return `{"data":{"ok":true}}`
+	})
+	if _, err := c.Create(context.Background(), "n", nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg := (*calls)[1].Vars["i"].(map[string]any)
+	mrc, ok := cfg["multiRegionConfig"].(map[string]any)
+	if !ok || len(mrc) != 1 {
+		t.Fatalf("multiRegionConfig %v, want exactly the configured region", cfg["multiRegionConfig"])
+	}
+	if r, ok := mrc["us-east4-eqdc4a"].(map[string]any); !ok || r["numReplicas"] != float64(1) {
+		t.Errorf("multiRegionConfig %v, want us-east4-eqdc4a with 1 replica", mrc)
+	}
+	if _, ok := cfg["numReplicas"]; ok {
+		t.Errorf("configure input %+v: a top-level numReplicas would compete with the region's", cfg)
+	}
+	if cfg["restartPolicyType"] != "NEVER" {
+		t.Errorf("restart policy %v, want NEVER", cfg["restartPolicyType"])
 	}
 }
 

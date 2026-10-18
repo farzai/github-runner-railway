@@ -66,6 +66,7 @@ controller project:
 | --- | --- |
 | `RUNNER_LABEL` | e.g. `railway-pg` |
 | `RUNNER_SERVICE_PREFIX` | e.g. `rp-` (the first controller keeps `rr-`; each lists and removes only its own services) |
+| `RUNNER_REGION` | optional, e.g. `us-east4-eqdc4a`: the region this controller's runners are created in; unset uses the workspace's preferred region |
 | `RUNNER_IMAGE` | `ghcr.io/farzai/github-runner-railway:pg-<version>` |
 | `RUNNER_SCOPES` | only the repositories that need it |
 | `POLL_SECONDS` | `60`: the App's one webhook URL goes to the first controller, so this one polls |

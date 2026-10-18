@@ -138,6 +138,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
 | `RUNNER_LABEL` | the `runs-on` label of this controller's runners | `railway` |
 | `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller in the same runner project needs its own (a letter, a letter or digit, a dash, e.g. `rp-`) | `rr-` |
+| `RUNNER_REGION` | Railway region id for this controller's runners, e.g. `us-east4-eqdc4a`; the API's `regions` query lists them. Unset leaves placement to Railway (the workspace's preferred region) | unset |
 | `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an `org:` scope, and the Default group (1) is refused | none |
 | `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | services in all / created in one cycle | `8` / `4` |
 | `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner: after a 3 s debounce, and at least 20 s after the previous cycle started) | `120` |
