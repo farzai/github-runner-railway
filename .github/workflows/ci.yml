@@ -52,7 +52,7 @@ jobs:
           echo "controller=${controller}" >>"$GITHUB_OUTPUT"
 
   # Images are named after the repository, so a fork publishes its own. A push to main publishes
-  # the sha tag; a vX.Y.Z tag also publishes runner :vX.Y.Z, :pg-vX.Y.Z, :php-vX.Y.Z and controller :vX.Y.Z.
+  # the sha tag; a vX.Y.Z tag also publishes runner :vX.Y.Z, :pg-vX.Y.Z, :sudo-vX.Y.Z, :redis-vX.Y.Z, :php-vX.Y.Z and controller :vX.Y.Z.
   # Layers are cached per target, so an unchanged stage keeps its layer digests.
   images:
     runs-on: ubuntu-latest
