@@ -153,7 +153,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 
 | Image | Contents |
 | --- | --- |
-| `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck; no `sudo`, no Docker |
+| `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck, gh; no `sudo`, no Docker |
 | `ghcr.io/farzai/github-runner-railway:pg-<version>` | the above plus PostgreSQL 18, Playwright's Chromium/WebKit system libraries and browsers (see `image/Dockerfile` for the pinned versions), and `ci-postgres` |
 | `ghcr.io/farzai/github-runner-railway:sudo-<version>` | the base image plus passwordless `sudo` for the runner user (opt-in, see below) |
 | `ghcr.io/farzai/github-runner-railway:php-<version>` | the base image plus PHP 8.3, 8.4 and 8.5 (ondrej/php PPA) and Composer, and `use-php <version>` to pick one; for PHP projects, since `setup-php` cannot run without sudo |

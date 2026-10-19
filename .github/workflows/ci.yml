@@ -154,7 +154,7 @@ jobs:
       - name: use-php picks each version
         run: |
           for v in 8.3 8.4 8.5; do
-            docker run --rm --entrypoint bash runner-php-smoke:ci -c "id -un | grep -qx runner && RUNNER_TEMP=/tmp use-php $v | grep -q 'PHP $v\.' && composer --version >/dev/null"
+            docker run --rm --entrypoint bash runner-php-smoke:ci -c "id -un | grep -qx runner && RUNNER_TEMP=/tmp use-php $v | grep -q 'PHP $v\.' && composer --version >/dev/null && gh --version >/dev/null"
           done
 
   # Builds the pg target for the default major and for another major with an extension, and runs
