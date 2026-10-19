@@ -52,7 +52,7 @@ jobs:
           echo "controller=${controller}" >>"$GITHUB_OUTPUT"
 
   # Images are named after the repository, so a fork publishes its own. A push to main publishes
-  # the sha tag; a vX.Y.Z tag also publishes runner :vX.Y.Z, :pg-vX.Y.Z and controller :vX.Y.Z.
+  # the sha tag; a vX.Y.Z tag also publishes runner :vX.Y.Z, :pg-vX.Y.Z, :sudo-vX.Y.Z, :redis-vX.Y.Z, :php-vX.Y.Z and controller :vX.Y.Z.
   # Layers are cached per target, so an unchanged stage keeps its layer digests.
   images:
     runs-on: ubuntu-latest
@@ -67,6 +67,7 @@ jobs:
           - {name: runner-pg, kind: runner, context: image, target: pg, image: '', prefix: 'pg-'}
           - {name: runner-sudo, kind: runner, context: image, target: sudo, image: '', prefix: 'sudo-'}
           - {name: runner-redis, kind: runner, context: image, target: redis, image: '', prefix: 'redis-'}
+          - {name: runner-php, kind: runner, context: image, target: php, image: '', prefix: 'php-'}
           - {name: controller, kind: controller, context: ., target: '', image: '-controller', prefix: ''}
     steps:
       - id: want
@@ -136,23 +137,24 @@ jobs:
           platforms: linux/amd64
           push: false
 
-  # The PHP example builds the same way, then checks every version it ships and `use-php` (the
-  # image exists because setup-php cannot run without sudo, #38); never pushed.
-  example-php:
+  # Builds the php target and checks every PHP version it ships, Composer and `use-php` as the runner
+  # user (the image exists because setup-php cannot run without sudo, #38). Not pushed.
+  php-variant:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          context: examples/php
+          context: image
+          target: php
           platforms: linux/amd64
           load: true
-          tags: runner-php:ci
+          tags: runner-php-smoke:ci
       - name: use-php picks each version
         run: |
           for v in 8.3 8.4 8.5; do
-            docker run --rm --entrypoint bash runner-php:ci -c "RUNNER_TEMP=/tmp use-php $v | grep -q 'PHP $v\.' && composer --version >/dev/null"
+            docker run --rm --entrypoint bash runner-php-smoke:ci -c "id -un | grep -qx runner && RUNNER_TEMP=/tmp use-php $v | grep -q 'PHP $v\.' && composer --version >/dev/null"
           done
 
   # Builds the pg target for the default major and for another major with an extension, and runs

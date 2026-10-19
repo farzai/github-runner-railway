@@ -156,6 +156,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `ghcr.io/farzai/github-runner-railway:<version>` | the official `actions-runner` (Ubuntu 24.04) plus git, curl, jq, python3, build-essential, shellcheck; no `sudo`, no Docker |
 | `ghcr.io/farzai/github-runner-railway:pg-<version>` | the above plus PostgreSQL 18, Playwright's Chromium/WebKit system libraries and browsers (see `image/Dockerfile` for the pinned versions), and `ci-postgres` |
 | `ghcr.io/farzai/github-runner-railway:sudo-<version>` | the base image plus passwordless `sudo` for the runner user (opt-in, see below) |
+| `ghcr.io/farzai/github-runner-railway:php-<version>` | the base image plus PHP 8.3, 8.4 and 8.5 (ondrej/php PPA) and Composer, and `use-php <version>` to pick one; for PHP projects, since `setup-php` cannot run without sudo |
 | `ghcr.io/farzai/github-runner-railway:redis-<version>` | the base image plus a pinned `redis-server` and `ci-redis` |
 
 To serve both, run a **second controller** with `RUNNER_LABEL=railway-pg`, `RUNNER_SERVICE_PREFIX=rp-`
@@ -232,8 +233,8 @@ The default images have no sudo, and an action that shells out to `sudo` does no
 `setup-php` prints `sudo: a password is required`, then never returns; the job runs until its
 timeout, which is how two PHP repositories each left four jobs running for 40 minutes. Put
 `timeout-minutes` on the step and the job so a stuck action costs minutes, not an hour. For PHP
-use [`examples/php`](examples/php/Dockerfile): a derived image with several PHP versions and Composer
-baked in, and `use-php <version>` to pick one with no root and no `setup-php` step. The opt-in sudo
+use the `php-<version>` image (target `php` in [`image/Dockerfile`](image/Dockerfile)): PHP 8.3, 8.4 and 8.5
+and Composer baked in, and `use-php <version>` to pick one with no root and no `setup-php` step (plain `php` is 8.5, the newest installed). The opt-in sudo
 variant below is the other route (setup-php can then run its apt steps); it is untested with
 setup-php here and gives the job root in its container.
 
@@ -281,7 +282,7 @@ else you need running.
 
 Releases are tagged `vX.Y.Z` (see [CHANGELOG.md](CHANGELOG.md)) and publish:
 
-* `ghcr.io/farzai/github-runner-railway:vX.Y.Z`, `:pg-vX.Y.Z` and `:sudo-vX.Y.Z`
+* `ghcr.io/farzai/github-runner-railway:vX.Y.Z`, `:pg-vX.Y.Z`, `:php-vX.Y.Z`, `:redis-vX.Y.Z` and `:sudo-vX.Y.Z`
 * `ghcr.io/farzai/github-runner-railway-controller:vX.Y.Z`
 
 Commits on `main` also publish images under the commit sha, but only for the images they change (docs/deploy.md says which sha is current). There is no `latest`:

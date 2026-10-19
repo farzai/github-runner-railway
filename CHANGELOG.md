@@ -14,6 +14,7 @@ the major version is 0, a minor release may change configuration (each such chan
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.
 
 ### Added
+- A `php` image variant (`php-<version>`): PHP 8.3, 8.4 and 8.5 from the ondrej/php PPA and Composer, with `use-php <version>` to choose one without root. `shivammathur/setup-php` cannot run on the default images (it needs `sudo` and then waits instead of failing); the README lists which `setup-*` actions work.
 - `RUNNER_REGION` (optional): the Railway region a controller creates its runners in, set per controller through `multiRegionConfig`. Unset keeps today's placement in the workspace's preferred region.
 - `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
 
