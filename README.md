@@ -218,6 +218,25 @@ system libraries; CI builds it on every change. Switch to `root` for the install
 `ACTIONS_RUNNER_INPUT_JITCONFIG`, runs one job and exits). Push it to your registry and set
 `RUNNER_IMAGE` to it.
 
+### Which `setup-*` actions work
+
+The default images have no sudo, and an action that shells out to `sudo` does not fail: it waits.
+
+| Action | Default image | Why |
+|---|---|---|
+| `actions/setup-node` | works (verified on the pool) | downloads Node into the runner's tool cache, no root |
+| `oven-sh/setup-bun` | works (verified on the pool) | downloads one binary into the home directory |
+| `shivammathur/setup-php` | **hangs** (reproduced, see below) | runs `sudo` for apt, `ln` and `tee` on a self-hosted Linux runner |
+| other `setup-*` actions | not verified here | test on the pool with a step `timeout-minutes` first; any that call `sudo` will hang the same way |
+
+`setup-php` prints `sudo: a password is required`, then never returns; the job runs until its
+timeout, which is how two PHP repositories each left four jobs running for 40 minutes. Put
+`timeout-minutes` on the step and the job so a stuck action costs minutes, not an hour. For PHP
+use [`examples/php`](examples/php/Dockerfile): a derived image with several PHP versions and Composer
+baked in, and `use-php <version>` to pick one with no root and no `setup-php` step. The opt-in sudo
+variant below is the other route (setup-php can then run its apt steps); it is untested with
+setup-php here and gives the job root in its container.
+
 ### The sudo variant (opt-in)
 
 For workflows you cannot change yet (`sudo apt-get install`, `playwright install --with-deps`,

@@ -136,6 +136,25 @@ jobs:
           platforms: linux/amd64
           push: false
 
+  # The PHP example builds the same way, then checks every version it ships and `use-php` (the
+  # image exists because setup-php cannot run without sudo, #38); never pushed.
+  example-php:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: examples/php
+          platforms: linux/amd64
+          load: true
+          tags: runner-php:ci
+      - name: use-php picks each version
+        run: |
+          for v in 8.3 8.4 8.5; do
+            docker run --rm --entrypoint bash runner-php:ci -c "RUNNER_TEMP=/tmp use-php $v | grep -q 'PHP $v\.' && composer --version >/dev/null"
+          done
+
   # Builds the pg target for the default major and for another major with an extension, and runs
   # image/smoke-pg.sh in each as the runner user (ci-postgres start, the major, CREATE EXTENSION).
   # Not pushed: these are checks of the build args, not published variants.
