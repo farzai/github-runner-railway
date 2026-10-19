@@ -235,6 +235,34 @@ func TestQueuedJobsCountOnlyQueuedJobsWithOurLabelInTheScopesRepos(t *testing.T)
 	}
 }
 
+// GitHub reports a run as "pending" (not "queued") while it waits to start, for example behind a
+// concurrency group, and its jobs are queued all the same: they must still be served.
+func TestQueuedJobsIncludeQueuedJobsOfPendingRuns(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/installation/repositories":
+			io.WriteString(w, `{"total_count":1,"repositories":[{"name":"a","owner":{"login":"acme"}}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "pending":
+			io.WriteString(w, `{"workflow_runs":[{"id":21}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
+			io.WriteString(w, `{"workflow_runs":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/runs/21/jobs"):
+			io.WriteString(w, `{"jobs":[{"id":7,"status":"queued","labels":["self-hosted","railway"],"created_at":"2026-10-19T02:26:25Z"}]}`)
+		default:
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+			w.WriteHeader(404)
+		}
+	}}
+	c := newGH(t, f)
+	jobs, err := c.QueuedJobs(context.Background(), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != 7 {
+		t.Errorf("jobs %+v, want job 7 of the pending run", jobs)
+	}
+}
+
 func TestQueuedJobsOfARepoScopeLookOnlyAtThatRepo(t *testing.T) {
 	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
 		switch {
