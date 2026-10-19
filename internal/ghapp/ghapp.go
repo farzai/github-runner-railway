@@ -420,7 +420,9 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 	seen := map[int64]bool{}
 	var out []Job
 	for _, repo := range repos {
-		for _, status := range []string{"queued", "in_progress"} {
+		// A run waiting to start reports "pending" (behind a concurrency group, say) while its
+		// jobs are already queued, so pending runs are read too.
+		for _, status := range []string{"queued", "pending", "in_progress"} {
 			var runIDs []int64
 			var runs struct {
 				Runs []struct {

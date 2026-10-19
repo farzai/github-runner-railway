@@ -5,6 +5,9 @@ the major version is 0, a minor release may change configuration (each such chan
 
 ## [Unreleased]
 
+### Fixed
+- Jobs queued in a run that GitHub reports as `pending` (for example while it waits on a concurrency group) are served; the controller listed only `queued` and `in_progress` runs and left such jobs waiting forever.
+
 ### Changed
 - A queued-job webhook starts a cycle after a 3 s debounce instead of a fixed 20 s; cycles still start at least 20 s apart (measured from the previous cycle's start).
 

@@ -40,8 +40,8 @@ func TestASecondIdenticalReadIsConditionalAndReusesTheBody(t *testing.T) {
 	if err != nil || len(second) != 1 || second[0].ID != first[0].ID {
 		t.Fatalf("second %v %v, want the same job as the first", second, err)
 	}
-	if len(conditional) != 3 {
-		t.Fatalf("304s for %v, want the two run lists and the jobs list", conditional)
+	if len(conditional) != 4 {
+		t.Fatalf("304s for %v, want the three run lists (queued, pending, in_progress) and the jobs list", conditional)
 	}
 }
 
