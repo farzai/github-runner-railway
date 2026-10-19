@@ -23,6 +23,19 @@ RUN curl -fsSL -o /tmp/shellcheck.tar.xz \
  && install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck \
  && rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-v${SHELLCHECK_VERSION}"
 
+# The GitHub CLI, so scripts that open or comment on issues (gh issue create, gh api) run on the pool
+# instead of needing a GitHub-hosted runner. Pinned release, verified against the sha256 in the
+# release's checksums file (the image is built for linux/amd64). No token is baked in: a job passes
+# GH_TOKEN itself.
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+RUN curl -fsSL -o /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+ && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp \
+ && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
+
 # A job must not be able to become root or write the runner's own files as root.
 RUN (deluser runner sudo || true) \
  && (deluser runner docker || true) \
@@ -32,7 +45,7 @@ RUN (deluser runner sudo || true) \
 # The build fails here, not at the first job, if any of that did not take.
 RUN ! id -nG runner | tr ' ' '\n' | grep -qxE 'sudo|docker|root' \
  && ! grep -rqs NOPASSWD /etc/sudoers /etc/sudoers.d \
- && for t in git curl jq unzip python3 gcc make shellcheck; do command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 1; }; done
+ && for t in git curl jq unzip python3 gcc make shellcheck gh; do command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 1; }; done
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
