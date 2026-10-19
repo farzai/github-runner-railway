@@ -8,5 +8,10 @@ mkdir -p "$dir"
 for tool in php phpize php-config phpdbg; do
   [ -x "/usr/bin/${tool}${v}" ] && ln -sf "/usr/bin/${tool}${v}" "${dir}/${tool}"
 done
-if [ -n "${GITHUB_PATH:-}" ]; then echo "$dir" >> "$GITHUB_PATH"; else export PATH="$dir:$PATH"; fi
+if [ -n "${GITHUB_PATH:-}" ]; then
+  echo "$dir" >> "$GITHUB_PATH"
+else
+  # Outside a job a script cannot change its caller's PATH: run `export PATH="<dir>:$PATH"` yourself.
+  echo "use-php: add to PATH: ${dir}" >&2
+fi
 PATH="$dir:$PATH" php -v | head -n 1

@@ -8,6 +8,8 @@
 # In a workflow:   - run: use-php 8.3        # puts that version first on PATH for the later steps
 #                  - run: composer install
 #
+# Without `use-php`, `php` is the apt alternatives default (the newest installed version).
+#
 # The base is pinned by digest; PHP comes from the ondrej/php PPA (key pinned by fingerprint),
 # Composer from its release, pinned by version and sha256.
 ARG BASE=ghcr.io/farzai/github-runner-railway:v0.1.0@sha256:992d69310adf6e7937f0a101f20f4991feb5f65a766654edfad8404239a14cc9
