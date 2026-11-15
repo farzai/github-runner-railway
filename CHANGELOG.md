@@ -6,6 +6,7 @@ the major version is 0, a minor release may change configuration (each such chan
 ## [Unreleased]
 
 ### Added
+- `libssl-dev` in every image variant, so Rust crates that link OpenSSL (`openssl-sys`) build on the pool; the build checks that `pkg-config` finds it.
 - The GitHub CLI (`gh` 2.102.0, pinned by version and sha256) in every image variant, so a job can open or comment on issues without a GitHub-hosted runner. Nothing is logged in: a job passes `GH_TOKEN`.
 
 ### Fixed

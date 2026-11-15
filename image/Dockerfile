@@ -9,7 +9,7 @@ USER root
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl wget git git-lfs jq unzip zip xz-utils tar gzip openssh-client \
-      build-essential pkg-config python3 python3-pip python3-venv \
+      build-essential pkg-config libssl-dev python3 python3-pip python3-venv \
  && rm -rf /var/lib/apt/lists/*
 
 # shellcheck, so actionlint checks run: scripts instead of skipping them silently. Pinned release,
@@ -45,7 +45,8 @@ RUN (deluser runner sudo || true) \
 # The build fails here, not at the first job, if any of that did not take.
 RUN ! id -nG runner | tr ' ' '\n' | grep -qxE 'sudo|docker|root' \
  && ! grep -rqs NOPASSWD /etc/sudoers /etc/sudoers.d \
- && for t in git curl jq unzip python3 gcc make shellcheck gh; do command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 1; }; done
+ && for t in git curl jq unzip python3 gcc make shellcheck gh; do command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 1; }; done \
+ && pkg-config --exists openssl
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
