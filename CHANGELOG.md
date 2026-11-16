@@ -11,6 +11,7 @@ the major version is 0, a minor release may change configuration (each such chan
 - The GitHub CLI (`gh` 2.102.0, pinned by version and sha256) in every image variant, so a job can open or comment on issues without a GitHub-hosted runner. Nothing is logged in: a job passes `GH_TOKEN`.
 
 ### Fixed
+- `/healthz` answers at once while a cycle runs, with the previous cycle's status; it waited for the cycle to end (about a minute with many repositories) and health checks timed out.
 - Jobs queued in a run that GitHub reports as `pending` (for example while it waits on a concurrency group) are served; the controller listed only `queued` and `in_progress` runs and left such jobs waiting forever.
 
 ### Changed

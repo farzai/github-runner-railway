@@ -28,9 +28,13 @@ type fakeGH struct {
 	deleted []int64
 	jit     []string
 	nextID  int64
+	hold    func() // when set, QueuedJobs calls it first: a test holds a cycle open with it
 }
 
 func (f *fakeGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, error) {
+	if f.hold != nil {
+		f.hold()
+	}
 	return f.jobs[s.Key()], f.jobsErr[s.Key()]
 }
 func (f *fakeGH) Runners(_ context.Context, s reconcile.Scope) ([]reconcile.Runner, error) {

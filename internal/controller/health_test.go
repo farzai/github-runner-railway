@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,11 +81,15 @@ func TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking(t *testing.T) {
 	gh := &fakeGH{jobsErr: map[string]error{org.Key(): errors.New("403 rate limited")}}
 	rw := &fakeRW{}
 	c, alerts := alerting(gh, rw)
-	for i := 0; i < 4; i++ {
+	_ = c.Cycle(context.Background())
+	if got := c.Status().UnreadableScopes; len(got) != 1 || got[0] != org.Key() {
+		t.Fatalf("after one failed read: unreadable %v, want [%s]", got, org.Key())
+	}
+	for i := 0; i < 3; i++ {
 		_ = c.Cycle(context.Background())
 	}
-	if len(*alerts) != 1 || !strings.Contains((*alerts)[0], org.Key()) || strings.Contains((*alerts)[0], repo.Key()) {
-		t.Fatalf("alerts %q, want one naming only %s", *alerts, org.Key())
+	if len(*alerts) != 1 || !strings.Contains((*alerts)[0], "scopes unreadable that long: "+org.Key()+";") || strings.Contains((*alerts)[0], repo.Key()) {
+		t.Fatalf("alerts %q, want one naming only %s as unreadable that long", *alerts, org.Key())
 	}
 	_, body := health(t, c)
 	if got, _ := body["unreadable_scopes"].([]any); len(got) != 1 || got[0] != org.Key() {
@@ -97,14 +102,14 @@ func TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking(t *testing.T) {
 	}
 }
 
-// Alerts are sent after the cycle releases its lock: a slow alert webhook must not stall /healthz,
-// which reads the status under the same lock.
+// Alerts are sent after the cycle releases its lock: a slow alert webhook must not hold up the next
+// cycle. The alert takes the lock itself, so it deadlocks if it runs while the cycle holds it.
 func TestAlertsAreSentWithoutHoldingTheLock(t *testing.T) {
 	boom := errors.New("github down")
 	gh := &fakeGH{jobsErr: map[string]error{org.Key(): boom, repo.Key(): boom}}
 	c, _ := alerting(gh, &fakeRW{})
 	sent := make(chan struct{}, 4)
-	c.cfg.Alert = func(string) { _ = c.Status(); sent <- struct{}{} }
+	c.cfg.Alert = func(string) { c.mu.Lock(); c.mu.Unlock(); sent <- struct{}{} }
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 3; i++ {
@@ -119,5 +124,61 @@ func TestAlertsAreSentWithoutHoldingTheLock(t *testing.T) {
 	}
 	if len(sent) != 1 {
 		t.Fatalf("alerts %d, want 1", len(sent))
+	}
+}
+
+// /healthz must not wait for a running cycle: a cycle holds the controller's lock for every GitHub
+// and Railway call (about a minute in production), and the health check used to time out behind it.
+// While a cycle is held open, /healthz answers at once with the previous cycle's status.
+func TestHealthzAnswersDuringACycleWithThePreviousStatus(t *testing.T) {
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 7, Repo: "acme/app", CreatedAt: now}}}}
+	c, _ := alerting(gh, &fakeRW{})
+	if err := c.Cycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	gh.hold = func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = c.Cycle(context.Background())
+		close(done)
+	}()
+	<-entered
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		c.HealthHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		answered <- rec
+	}()
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-answered:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("/healthz did not answer within 100 ms while a cycle was running")
+	}
+	close(release)
+	<-done
+	if rec == nil {
+		<-answered // the late answer, so nothing outlives the test
+		return
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body.String(), err)
+	}
+	if rec.Code != http.StatusOK || body["queued"] != float64(1) || body["services"] != float64(1) {
+		t.Errorf("during a cycle: %d %v, want 200 with the previous cycle's queued 1 and services 1", rec.Code, body)
+	}
+}
+
+// Before the first cycle has finished there is no status yet, and /healthz answers 503.
+func TestHealthzIs503BeforeTheFirstCycle(t *testing.T) {
+	c, _ := alerting(&fakeGH{}, &fakeRW{})
+	if code, body := health(t, c); code != http.StatusServiceUnavailable || body["services"] != float64(0) {
+		t.Fatalf("before any cycle: %d %v, want 503", code, body)
 	}
 }
