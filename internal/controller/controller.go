@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/farzai/github-runner-railway/internal/ghapp"
@@ -61,9 +62,9 @@ type Controller struct {
 	rw      RW
 	now     func() time.Time
 	wake    chan struct{}
-	mu      sync.Mutex
-	alerted map[int64]string // job id -> scope key
-	status  Status
+	mu      sync.Mutex             // held for a whole cycle; guards the cycle state below, not status
+	alerted map[int64]string       // job id -> scope key
+	status  atomic.Pointer[Status] // the last cycle's outcome, replaced whole and never changed after
 
 	failures    int                  // failed cycles in a row
 	lastSuccess time.Time            // the end of the last cycle with no error
@@ -130,11 +131,13 @@ func (c *Controller) Nudge() {
 	}
 }
 
-// Status is the state after the last cycle.
+// Status is the state after the last cycle. It never waits for a running cycle, so /healthz
+// answers while a cycle is busy with GitHub and Railway.
 func (c *Controller) Status() Status {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.status
+	if st := c.status.Load(); st != nil {
+		return *st
+	}
+	return Status{}
 }
 
 // Run cycles until ctx ends: on every interval and on every nudge. A nudge waits out the debounce
@@ -190,7 +193,7 @@ func scopeByKey(ss []reconcile.Scope, key string) reconcile.Scope {
 // Cycle is one pass. A scope GitHub cannot be read for is left alone entirely: its services
 // are neither counted nor reaped, since a guess about them could kill a busy runner.
 func (c *Controller) Cycle(ctx context.Context) (err error) {
-	// Alerts go out after the lock is released: a slow alert webhook must not stall /healthz.
+	// Alerts go out after the lock is released: a slow alert webhook must not hold up the next cycle.
 	var alerts []string
 	defer func() {
 		for _, a := range alerts {
@@ -296,7 +299,30 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 		c.failures = 0
 		c.lastSuccess = now
 	}
-	var unreadable, stuck []string
+	unreadable, stuck := c.unreadableScopes()
+	st := &Status{LastCycle: now, Services: services, Queued: queued, ConsecutiveFailures: c.failures,
+		LastSuccess: c.lastSuccess, UnreadableScopes: unreadable, Failing: c.failures >= c.cfg.FailAlertAfter}
+	if len(errs) > 0 {
+		st.LastError = errors.Join(errs...).Error()
+	}
+	c.status.Store(st)
+	switch {
+	case c.failures >= c.cfg.FailAlertAfter && !c.failAlerted:
+		c.failAlerted = true
+		msg := fmt.Sprintf("controller: %d cycles in a row failed", c.failures)
+		if len(stuck) > 0 {
+			msg += "; scopes unreadable that long: " + strings.Join(stuck, ", ")
+		}
+		c.pending = append(c.pending, msg+"; last error: "+truncate(st.LastError, 300))
+	case c.failures == 0 && c.failAlerted:
+		c.failAlerted = false
+		c.pending = append(c.pending, "controller: recovered, the last cycle succeeded")
+	}
+}
+
+// unreadableScopes are the scopes the last cycle could not read, and of those the ones unreadable
+// for FailAlertAfter cycles or more.
+func (c *Controller) unreadableScopes() (unreadable, stuck []string) {
 	for _, s := range c.cfg.Scopes {
 		if n := c.scopeFails[s.Key()]; n > 0 {
 			unreadable = append(unreadable, s.Key())
@@ -305,23 +331,7 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 			}
 		}
 	}
-	c.status = Status{LastCycle: now, Services: services, Queued: queued, ConsecutiveFailures: c.failures,
-		LastSuccess: c.lastSuccess, UnreadableScopes: unreadable, Failing: c.failures >= c.cfg.FailAlertAfter}
-	if len(errs) > 0 {
-		c.status.LastError = errors.Join(errs...).Error()
-	}
-	switch {
-	case c.failures >= c.cfg.FailAlertAfter && !c.failAlerted:
-		c.failAlerted = true
-		msg := fmt.Sprintf("controller: %d cycles in a row failed", c.failures)
-		if len(stuck) > 0 {
-			msg += "; scopes unreadable that long: " + strings.Join(stuck, ", ")
-		}
-		c.pending = append(c.pending, msg+"; last error: "+truncate(c.status.LastError, 300))
-	case c.failures == 0 && c.failAlerted:
-		c.failAlerted = false
-		c.pending = append(c.pending, "controller: recovered, the last cycle succeeded")
-	}
+	return unreadable, stuck
 }
 
 func truncate(s string, n int) string {
