@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,4 +121,44 @@ func TestAlertsAreSentWithoutHoldingTheLock(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("alerts %d, want 1", len(sent))
 	}
+}
+
+// /healthz must not wait for a running cycle: a cycle holds the controller's lock for every GitHub
+// and Railway call (about a minute in production), and the health check used to time out behind it.
+// While a cycle is held open, /healthz answers at once with the previous cycle's status.
+func TestHealthzAnswersDuringACycleWithThePreviousStatus(t *testing.T) {
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 7, Repo: "acme/app", CreatedAt: now}}}}
+	c, _ := alerting(gh, &fakeRW{})
+	if err := c.Cycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	gh.hold = func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = c.Cycle(context.Background())
+		close(done)
+	}()
+	<-entered
+	answered := make(chan int, 1)
+	var body map[string]any
+	go func() {
+		code, b := health(t, c)
+		body = b
+		answered <- code
+	}()
+	select {
+	case code := <-answered:
+		if code != http.StatusOK || body["queued"] != float64(1) || body["services"] != float64(1) {
+			t.Errorf("during a cycle: %d %v, want 200 with the previous cycle's queued 1 and services 1", code, body)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("/healthz did not answer within 100 ms while a cycle was running")
+	}
+	close(release)
+	<-done
 }
