@@ -1,0 +1,6 @@
+--- FAIL: TestHealthzCountsUnreadableScopesWithoutNamingThem (0.00s)
+    healthz_names_test.go:32: /healthz body {"consecutive_failures":3,"error":true,"last_cycle":"2026-10-17T12:00:00Z","last_success":null,"queued":0,"services":0,"unreadable_scopes":["org:acme","repo:acme/app"]}
+         names a scope, want only the count
+FAIL
+FAIL	github.com/farzai/github-runner-railway/internal/controller	0.160s
+FAIL

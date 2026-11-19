@@ -11,7 +11,7 @@ the major version is 0, a minor release may change configuration (each such chan
 - The GitHub CLI (`gh` 2.102.0, pinned by version and sha256) in every image variant, so a job can open or comment on issues without a GitHub-hosted runner. Nothing is logged in: a job passes `GH_TOKEN`.
 
 ### Fixed
-- A scope in `RUNNER_SCOPES` that GitHub answers 404 for (a deleted repository, for example) no longer fails every cycle and turns `/healthz` 503: it is listed in `unreadable_scopes`, logged at warn once a cycle and left out of the failing alert, while the other scopes keep getting runners. After `ALERT_FAILED_CYCLES` cycles in a row such a scope raises one alert of its own, and one more when it reads again. When every scope answers 404 (the App uninstalled, for example), the cycle still fails. In an org scope, a repository or run that vanishes mid-cycle is skipped instead of hiding the whole org. Other GitHub errors still fail the cycle.
+- A scope in `RUNNER_SCOPES` that GitHub answers 404 for (a deleted repository, for example) no longer fails every cycle and turns `/healthz` 503: it is counted in `unreadable_scopes`, logged at warn once a cycle and left out of the failing alert, while the other scopes keep getting runners. After `ALERT_FAILED_CYCLES` cycles in a row such a scope raises one alert of its own, and one more when it reads again. When every scope answers 404 (the App uninstalled, for example), the cycle still fails. In an org scope, a repository or run that vanishes mid-cycle is skipped instead of hiding the whole org. Other GitHub errors still fail the cycle.
 - `/healthz` answers at once while a cycle runs, with the previous cycle's status; it waited for the cycle to end (about a minute with many repositories) and health checks timed out.
 - Jobs queued in a run that GitHub reports as `pending` (for example while it waits on a concurrency group) are served; the controller listed only `queued` and `in_progress` runs and left such jobs waiting forever.
 
@@ -23,7 +23,7 @@ the major version is 0, a minor release may change configuration (each such chan
 ### Added
 - A `php` image variant (`php-<version>`): PHP 8.3, 8.4 and 8.5 from the ondrej/php PPA and Composer, with `use-php <version>` to choose one without root. `shivammathur/setup-php` cannot run on the default images (it needs `sudo` and then waits instead of failing); the README lists which `setup-*` actions work.
 - `RUNNER_REGION` (optional): the Railway region a controller creates its runners in, set per controller through `multiRegionConfig`. Unset keeps today's placement in the workspace's preferred region.
-- `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`.
+- `ALERT_FAILED_CYCLES` (default 3): after that many failed cycles in a row the controller alerts once (naming scopes unreadable that long), `/healthz` answers 503, and one "recovered" alert follows the next good cycle. `/healthz` also reports `last_success`, `consecutive_failures` and `unreadable_scopes`, the number of scopes the last cycle could not read. Since `/healthz` is public, it never names them (a private repository's name would leak); the names are in the log lines and the failing alert.
 
 ### Fixed
 - A controller whose every cycle failed kept answering 200 on `/healthz` and raised no alert.
