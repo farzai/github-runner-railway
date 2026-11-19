@@ -34,6 +34,10 @@ const maxPages = 50
 // ErrBusy is GitHub refusing to delete a runner that is running a job.
 var ErrBusy = errors.New("ghapp: runner is busy")
 
+// ErrNotFound is GitHub answering 404: the repository, organization or installation is not there
+// (deleted, renamed, or the App no longer holds it).
+var ErrNotFound = errors.New("ghapp: not found")
+
 // Config is the App and the label this fleet serves.
 type Config struct {
 	AppID         string
@@ -174,7 +178,7 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 		return cached.hdr, http.StatusOK, nil // the cached Link header still names the next page
 	}
 	if res.StatusCode >= 300 {
-		return res.Header, res.StatusCode, fmt.Errorf("ghapp: %s %s: HTTP %d", method, req.URL.Path, res.StatusCode)
+		return res.Header, res.StatusCode, statusError(method, req.URL.Path, res.StatusCode)
 	}
 	if method == http.MethodGet {
 		// Only a list answer with total_count is reused on a 304: total_count changes when the list
@@ -190,6 +194,14 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 		}
 	}
 	return res.Header, res.StatusCode, nil
+}
+
+// statusError is the error for an answer that is not a success; a 404 wraps ErrNotFound.
+func statusError(method, path string, code int) error {
+	if code == http.StatusNotFound {
+		return fmt.Errorf("%w: %s %s: HTTP 404", ErrNotFound, method, path)
+	}
+	return fmt.Errorf("ghapp: %s %s: HTTP %d", method, path, code)
 }
 
 // keep stores a GET answer for conditional requests, pruning entries unused for an hour once the
@@ -388,82 +400,110 @@ type Job struct {
 }
 
 // QueuedJobs are the queued jobs with our label in the scope's repositories: every repository
-// the installation holds under the org, or the one repository of a repo scope.
+// the installation holds under the org, or the one repository of a repo scope. A repo scope that
+// answers 404 is ErrNotFound; in an org scope a repository that vanished after the listing is skipped.
 func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, error) {
 	tok, err := c.installToken(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	var repos []string
-	if s.Kind == "repo" {
-		repos = []string{s.Owner + "/" + s.Repo}
-	} else {
-		var cur struct {
-			Repositories []struct {
-				Name  string `json:"name"`
-				Owner struct {
-					Login string `json:"login"`
-				} `json:"owner"`
-			} `json:"repositories"`
-		}
-		err := c.each(ctx, c.cfg.BaseURL+"/installation/repositories?per_page=100", tok, func() any { cur.Repositories = nil; return &cur }, func() {
-			for _, r := range cur.Repositories {
-				if strings.EqualFold(r.Owner.Login, s.Owner) {
-					repos = append(repos, r.Owner.Login+"/"+r.Name)
-				}
-			}
-		})
-		if err != nil {
+	repos := []string{s.Owner + "/" + s.Repo}
+	if s.Kind == "org" {
+		if repos, err = c.orgRepos(ctx, s, tok); err != nil {
 			return nil, err
 		}
 	}
 	seen := map[int64]bool{}
 	var out []Job
 	for _, repo := range repos {
-		// A run waiting to start reports "pending" (behind a concurrency group, say) while its
-		// jobs are already queued, so pending runs are read too.
-		for _, status := range []string{"queued", "pending", "in_progress"} {
-			var runIDs []int64
-			var runs struct {
-				Runs []struct {
-					ID int64 `json:"id"`
-				} `json:"workflow_runs"`
+		jobs, err := c.repoJobs(ctx, repo, tok, seen)
+		if errors.Is(err, ErrNotFound) && s.Kind == "org" {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, jobs...)
+	}
+	return out, nil
+}
+
+// orgRepos are the repositories of the org that the installation holds.
+func (c *Client) orgRepos(ctx context.Context, s reconcile.Scope, tok string) ([]string, error) {
+	var repos []string
+	var cur struct {
+		Repositories []struct {
+			Name  string `json:"name"`
+			Owner struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+		} `json:"repositories"`
+	}
+	err := c.each(ctx, c.cfg.BaseURL+"/installation/repositories?per_page=100", tok, func() any { cur.Repositories = nil; return &cur }, func() {
+		for _, r := range cur.Repositories {
+			if strings.EqualFold(r.Owner.Login, s.Owner) {
+				repos = append(repos, r.Owner.Login+"/"+r.Name)
 			}
-			err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs?status=%s&per_page=100", c.cfg.BaseURL, repo, status), tok,
-				func() any { runs.Runs = nil; return &runs }, func() {
-					for _, r := range runs.Runs {
-						runIDs = append(runIDs, r.ID)
-					}
-				})
-			if err != nil {
+		}
+	})
+	return repos, err
+}
+
+// repoJobs are the queued jobs with our label in one repository, skipping the ids in seen and
+// adding its own. A run that vanished after the runs listing is skipped.
+func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]bool) ([]Job, error) {
+	var out []Job
+	// A run waiting to start reports "pending" (behind a concurrency group, say) while its
+	// jobs are already queued, so pending runs are read too.
+	for _, status := range []string{"queued", "pending", "in_progress"} {
+		var runIDs []int64
+		var runs struct {
+			Runs []struct {
+				ID int64 `json:"id"`
+			} `json:"workflow_runs"`
+		}
+		err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs?status=%s&per_page=100", c.cfg.BaseURL, repo, status), tok,
+			func() any { runs.Runs = nil; return &runs }, func() {
+				for _, r := range runs.Runs {
+					runIDs = append(runIDs, r.ID)
+				}
+			})
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range runIDs {
+			jobs, err := c.runJobs(ctx, repo, id, tok, seen)
+			if err != nil && !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
-			for _, id := range runIDs {
-				var jobs struct {
-					Jobs []struct {
-						ID        int64     `json:"id"`
-						Status    string    `json:"status"`
-						Labels    []string  `json:"labels"`
-						CreatedAt time.Time `json:"created_at"`
-					} `json:"jobs"`
-				}
-				err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", c.cfg.BaseURL, repo, id), tok,
-					func() any { jobs.Jobs = nil; return &jobs }, func() {
-						for _, j := range jobs.Jobs {
-							if j.Status != "queued" || seen[j.ID] || !c.canTake(j.Labels) {
-								continue
-							}
-							seen[j.ID] = true
-							out = append(out, Job{ID: j.ID, Repo: repo, CreatedAt: j.CreatedAt})
-						}
-					})
-				if err != nil {
-					return nil, err
-				}
-			}
+			out = append(out, jobs...)
 		}
 	}
 	return out, nil
+}
+
+// runJobs are the queued jobs with our label in one run, skipping the ids in seen and adding its own.
+func (c *Client) runJobs(ctx context.Context, repo string, run int64, tok string, seen map[int64]bool) ([]Job, error) {
+	var out []Job
+	var jobs struct {
+		Jobs []struct {
+			ID        int64     `json:"id"`
+			Status    string    `json:"status"`
+			Labels    []string  `json:"labels"`
+			CreatedAt time.Time `json:"created_at"`
+		} `json:"jobs"`
+	}
+	err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", c.cfg.BaseURL, repo, run), tok,
+		func() any { jobs.Jobs = nil; return &jobs }, func() {
+			for _, j := range jobs.Jobs {
+				if j.Status != "queued" || seen[j.ID] || !c.canTake(j.Labels) {
+					continue
+				}
+				seen[j.ID] = true
+				out = append(out, Job{ID: j.ID, Repo: repo, CreatedAt: j.CreatedAt})
+			}
+		})
+	return out, err
 }
 
 // canTake: a runner of ours has self-hosted, linux, x64 (GitHub adds the last two) and our
