@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/farzai/github-runner-railway/internal/ghapp"
+	"github.com/farzai/github-runner-railway/internal/reconcile"
 )
 
 // A deleted repository in RUNNER_SCOPES answers 404. It is listed as unreadable and warned about
@@ -80,8 +81,12 @@ func TestAScopeWhoseRunnersAreNotFoundDoesNotFailTheCycle(t *testing.T) {
 	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
 		t.Fatalf("%d warn lines, want one:\n%s", n, logs.String())
 	}
-	if code, body := health(t, c); code != http.StatusOK || body["error"] != false {
+	code, body := health(t, c)
+	if code != http.StatusOK || body["error"] != false {
 		t.Fatalf("health %d %v, want 200", code, body)
+	}
+	if got, _ := body["unreadable_scopes"].([]any); len(got) != 1 || got[0] != repo.Key() {
+		t.Fatalf("unreadable_scopes %v after one cycle, want [%s]", body["unreadable_scopes"], repo.Key())
 	}
 }
 
@@ -172,5 +177,20 @@ func TestAMissingScopeIsAlertedOnceAndClearedWhenItReadsAgain(t *testing.T) {
 	}
 	if _, body := health(t, c); len(body["unreadable_scopes"].([]any)) != 0 {
 		t.Fatalf("unreadable_scopes %v, want none", body["unreadable_scopes"])
+	}
+}
+
+// A pool of one scope that answers 404 is every scope gone: the cycle fails. A pool with no scopes
+// has nothing missing and does not fail.
+func TestASingleScopePoolThatIsNotFoundFailsAndAnEmptyPoolDoesNot(t *testing.T) {
+	gh := &fakeGH{jobsErr: map[string]error{repo.Key(): notFound("acme/app")}}
+	c, _ := alerting(gh, &fakeRW{})
+	c.cfg.Scopes = []reconcile.Scope{repo}
+	if err := c.Cycle(context.Background()); err == nil || !strings.Contains(err.Error(), repo.Key()) {
+		t.Fatalf("cycle: %v, want a failure naming %s", err, repo.Key())
+	}
+	c.cfg.Scopes = nil
+	if err := c.Cycle(context.Background()); err != nil {
+		t.Fatalf("cycle with no scopes: %v, want success", err)
 	}
 }

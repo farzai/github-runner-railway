@@ -296,7 +296,7 @@ func (c *Controller) readScopes(ctx context.Context) scopeReads {
 		rd.readable = append(rd.readable, s)
 		rd.queued[s.Key()], rd.runners[s.Key()], rd.jobs[s.Key()] = len(jobs), rs, jobs
 	}
-	if fail := c.noneReadable(rd.readable); fail != nil {
+	if fail := c.noneReadable(); fail != nil {
 		rd.errs = append(rd.errs, fail)
 		return rd
 	}
@@ -308,16 +308,16 @@ func (c *Controller) readScopes(ctx context.Context) scopeReads {
 // likely the App uninstalled or its installation gone than repos deleted, and nothing at all can be
 // served. The failing alert then names the scopes in its last error. When some scopes failed for
 // another reason, those errors already fail the cycle and the 404 scopes are not blamed for it.
-func (c *Controller) noneReadable(readable []reconcile.Scope) error {
-	if len(readable) > 0 || len(c.cfg.Scopes) == 0 {
-		return nil
-	}
-	gone := make([]string, 0, len(c.cfg.Scopes))
+func (c *Controller) noneReadable() error {
+	var gone []string
 	for _, s := range c.cfg.Scopes {
 		if c.missing[s.Key()] == 0 {
 			return nil
 		}
 		gone = append(gone, s.Key())
+	}
+	if len(gone) == 0 {
+		return nil
 	}
 	return fmt.Errorf("every scope not found on GitHub: %s (is the GitHub App still installed?)", strings.Join(gone, ", "))
 }
