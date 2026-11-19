@@ -28,6 +28,7 @@ func TestHealthzCountsUnreadableScopesWithoutNamingThem(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	c.HealthHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	// fakeGH reports no rate limits, so no owner login can reach the body that way either.
 	if raw := rec.Body.String(); strings.Contains(raw, "acme") {
 		t.Fatalf("/healthz body %s names a scope, want only the count", raw)
 	}

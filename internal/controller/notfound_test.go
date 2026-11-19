@@ -37,8 +37,8 @@ func TestAScopeThatIsNotFoundIsWarnedAboutButTheCycleSucceeds(t *testing.T) {
 	if code != http.StatusOK || body["consecutive_failures"] != float64(0) || body["error"] != false {
 		t.Fatalf("health %d %v, want 200 with no failures", code, body)
 	}
-	if got, _ := body["unreadable_scopes"].([]any); len(got) != 1 || got[0] != repo.Key() {
-		t.Fatalf("unreadable_scopes %v, want [%s]", body["unreadable_scopes"], repo.Key())
+	if body["unreadable_scopes"] != float64(1) {
+		t.Fatalf("unreadable_scopes %v, want 1", body["unreadable_scopes"])
 	}
 	if len(rw.created) == 0 {
 		t.Fatalf("created %v: the readable scope must get runners", rw.created)
@@ -85,8 +85,8 @@ func TestAScopeWhoseRunnersAreNotFoundDoesNotFailTheCycle(t *testing.T) {
 	if code != http.StatusOK || body["error"] != false {
 		t.Fatalf("health %d %v, want 200", code, body)
 	}
-	if got, _ := body["unreadable_scopes"].([]any); len(got) != 1 || got[0] != repo.Key() {
-		t.Fatalf("unreadable_scopes %v after one cycle, want [%s]", body["unreadable_scopes"], repo.Key())
+	if body["unreadable_scopes"] != float64(1) {
+		t.Fatalf("unreadable_scopes %v after one cycle, want 1", body["unreadable_scopes"])
 	}
 }
 
@@ -112,7 +112,7 @@ func TestTheFailingAlertDoesNotBlameANotFoundScope(t *testing.T) {
 		t.Fatalf("alerts %q, want one failing alert naming only %s", *alerts, org.Key())
 	}
 	_, body := health(t, c)
-	if got, _ := body["unreadable_scopes"].([]any); len(got) != 2 {
+	if body["unreadable_scopes"] != float64(2) {
 		t.Fatalf("unreadable_scopes %v, want both scopes", body["unreadable_scopes"])
 	}
 }
@@ -175,7 +175,7 @@ func TestAMissingScopeIsAlertedOnceAndClearedWhenItReadsAgain(t *testing.T) {
 	if len(*alerts) != 2 || (*alerts)[1] != "controller: scope "+repo.Key()+" is readable again" {
 		t.Fatalf("alerts %q, want one readable-again message", *alerts)
 	}
-	if _, body := health(t, c); len(body["unreadable_scopes"].([]any)) != 0 {
+	if _, body := health(t, c); body["unreadable_scopes"] != float64(0) {
 		t.Fatalf("unreadable_scopes %v, want none", body["unreadable_scopes"])
 	}
 }
