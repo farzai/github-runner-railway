@@ -24,6 +24,7 @@ type fakeGH struct {
 	jobs    map[string][]ghapp.Job
 	runners map[string][]reconcile.Runner
 	jobsErr map[string]error
+	runsErr map[string]error // Runners fails with it for the scope
 	busy    map[int64]bool
 	deleted []int64
 	jit     []string
@@ -38,7 +39,7 @@ func (f *fakeGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, 
 	return f.jobs[s.Key()], f.jobsErr[s.Key()]
 }
 func (f *fakeGH) Runners(_ context.Context, s reconcile.Scope) ([]reconcile.Runner, error) {
-	return f.runners[s.Key()], nil
+	return f.runners[s.Key()], f.runsErr[s.Key()]
 }
 func (f *fakeGH) JITConfig(_ context.Context, s reconcile.Scope, name string) (string, int64, error) {
 	f.mu.Lock()

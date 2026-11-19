@@ -68,7 +68,8 @@ type Controller struct {
 
 	failures    int                  // failed cycles in a row
 	lastSuccess time.Time            // the end of the last cycle with no error
-	scopeFails  map[string]int       // scope key -> cycles in a row it could not be read
+	scopeFails  map[string]int       // scope key -> cycles in a row it could not be read, a 404 aside
+	missing     map[string]bool      // scope keys GitHub answered 404 for in the last cycle
 	failAlerted bool                 // the failing state has been alerted and not yet recovered
 	lowWarn     map[string]time.Time // account -> the reset of the window already warned about
 	pending     []string             // alerts of this cycle, sent once the lock is released
@@ -112,7 +113,7 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 		cfg.FailAlertAfter = 3
 	}
 	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{},
-		scopeFails: map[string]int{}, lowWarn: map[string]time.Time{}}
+		scopeFails: map[string]int{}, missing: map[string]bool{}, lowWarn: map[string]time.Time{}}
 }
 
 // OnEvent is the webhook handler. Only a queued job can need a new runner; the rest wait for
@@ -191,7 +192,9 @@ func scopeByKey(ss []reconcile.Scope, key string) reconcile.Scope {
 }
 
 // Cycle is one pass. A scope GitHub cannot be read for is left alone entirely: its services
-// are neither counted nor reaped, since a guess about them could kill a busy runner.
+// are neither counted nor reaped, since a guess about them could kill a busy runner. A scope
+// GitHub answers 404 for (a deleted or renamed repo) is listed as unreadable and warned about,
+// but does not fail the cycle; any other read error does.
 func (c *Controller) Cycle(ctx context.Context) (err error) {
 	// Alerts go out after the lock is released: a slow alert webhook must not hold up the next cycle.
 	var alerts []string
@@ -218,19 +221,13 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	jobsOf := map[string][]ghapp.Job{}
 	var readable []reconcile.Scope
 	for _, s := range c.cfg.Scopes {
-		jobs, err := c.gh.QueuedJobs(ctx, s)
+		jobs, rs, err := c.readScope(ctx, s)
+		if fail := c.noteRead(s.Key(), err); fail != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", s.Key(), fail))
+		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", s.Key(), err))
-			c.scopeFails[s.Key()]++
 			continue
 		}
-		rs, err := c.gh.Runners(ctx, s)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", s.Key(), err))
-			c.scopeFails[s.Key()]++
-			continue
-		}
-		delete(c.scopeFails, s.Key())
 		readable = append(readable, s)
 		queued[s.Key()], runners[s.Key()], jobsOf[s.Key()] = len(jobs), rs, jobs
 	}
@@ -288,6 +285,41 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	return errors.Join(errs...)
 }
 
+// noteRead records how reading the scope went and returns the error that fails the cycle, if any.
+// A 404 (a deleted repo, a typo in RUNNER_SCOPES, an App no longer installed) marks the scope
+// missing and is warned about every cycle, but is not an outage: it neither fails the cycle nor
+// counts toward the failing alert's scopes unreadable that long.
+func (c *Controller) noteRead(key string, err error) error {
+	switch {
+	case err == nil:
+		delete(c.scopeFails, key)
+		delete(c.missing, key)
+		return nil
+	case errors.Is(err, ghapp.ErrNotFound):
+		delete(c.scopeFails, key)
+		c.missing[key] = true
+		c.cfg.Log.Warn("scope not found on GitHub; skipped", "scope", key, "err", err.Error())
+		return nil
+	default:
+		c.scopeFails[key]++
+		delete(c.missing, key)
+		return err
+	}
+}
+
+// readScope reads the scope's queued jobs and its runners.
+func (c *Controller) readScope(ctx context.Context, s reconcile.Scope) ([]ghapp.Job, []reconcile.Runner, error) {
+	jobs, err := c.gh.QueuedJobs(ctx, s)
+	if err != nil {
+		return nil, nil, err
+	}
+	rs, err := c.gh.Runners(ctx, s)
+	if err != nil {
+		return nil, nil, err
+	}
+	return jobs, rs, nil
+}
+
 // record keeps the cycle's outcome for /healthz and raises the failing and recovered alerts: one
 // alert when FailAlertAfter cycles in a row have failed, naming the scopes unreadable for that long,
 // and one message when a cycle succeeds again. A failed cycle still stamps LastCycle (the loop is
@@ -320,15 +352,16 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 	}
 }
 
-// unreadableScopes are the scopes the last cycle could not read, and of those the ones unreadable
-// for FailAlertAfter cycles or more.
+// unreadableScopes are the scopes the last cycle could not read (a 404 included), and of those the
+// ones that failed for FailAlertAfter cycles or more for another reason.
 func (c *Controller) unreadableScopes() (unreadable, stuck []string) {
 	for _, s := range c.cfg.Scopes {
-		if n := c.scopeFails[s.Key()]; n > 0 {
+		n := c.scopeFails[s.Key()]
+		if n > 0 || c.missing[s.Key()] {
 			unreadable = append(unreadable, s.Key())
-			if n >= c.cfg.FailAlertAfter {
-				stuck = append(stuck, s.Key())
-			}
+		}
+		if n >= c.cfg.FailAlertAfter {
+			stuck = append(stuck, s.Key())
 		}
 	}
 	return unreadable, stuck
