@@ -86,7 +86,8 @@ func TestAScopeWhoseRunnersAreNotFoundDoesNotFailTheCycle(t *testing.T) {
 }
 
 // When an outage fails the cycles, the failing alert names the scopes unreadable because of it, not a
-// deleted repository that answers 404 throughout; that one stays listed on /healthz.
+// deleted repository that answers 404 throughout; that one stays listed on /healthz and gets its own
+// missing-scope alert.
 func TestTheFailingAlertDoesNotBlameANotFoundScope(t *testing.T) {
 	gh := &fakeGH{jobsErr: map[string]error{
 		org.Key():  errors.New("github down"),
@@ -96,8 +97,14 @@ func TestTheFailingAlertDoesNotBlameANotFoundScope(t *testing.T) {
 	for i := 0; i < c.cfg.FailAlertAfter; i++ {
 		_ = c.Cycle(context.Background())
 	}
-	if len(*alerts) != 1 || !strings.Contains((*alerts)[0], "scopes unreadable that long: "+org.Key()+";") || strings.Contains((*alerts)[0], repo.Key()) {
-		t.Fatalf("alerts %q, want one naming only %s", *alerts, org.Key())
+	var failing []string
+	for _, a := range *alerts {
+		if strings.Contains(a, "cycles in a row failed") {
+			failing = append(failing, a)
+		}
+	}
+	if len(failing) != 1 || !strings.Contains(failing[0], "scopes unreadable that long: "+org.Key()+";") || strings.Contains(failing[0], repo.Key()) {
+		t.Fatalf("alerts %q, want one failing alert naming only %s", *alerts, org.Key())
 	}
 	_, body := health(t, c)
 	if got, _ := body["unreadable_scopes"].([]any); len(got) != 2 {
@@ -128,9 +135,9 @@ func TestEveryScopeNotFoundFailsTheCycleAndAlerts(t *testing.T) {
 		!strings.Contains((*alerts)[0], org.Key()) || !strings.Contains((*alerts)[0], repo.Key()) {
 		t.Fatalf("alerts %q, want one failing alert naming both scopes", *alerts)
 	}
-	delete(gh.jobsErr, org.Key())
+	gh.jobsErr = nil // the App is installed again
 	if err := c.Cycle(context.Background()); err != nil {
-		t.Fatalf("cycle with one readable scope: %v, want success", err)
+		t.Fatalf("cycle after the scopes came back: %v, want success", err)
 	}
 	if len(*alerts) != 2 || !strings.Contains((*alerts)[1], "recovered") {
 		t.Fatalf("alerts %q, want the recovered message next", *alerts)
