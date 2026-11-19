@@ -34,6 +34,10 @@ const maxPages = 50
 // ErrBusy is GitHub refusing to delete a runner that is running a job.
 var ErrBusy = errors.New("ghapp: runner is busy")
 
+// ErrNotFound is GitHub answering 404: the repository, organization or installation is not there
+// (deleted, renamed, or the App no longer holds it).
+var ErrNotFound = errors.New("ghapp: not found")
+
 // Config is the App and the label this fleet serves.
 type Config struct {
 	AppID         string
