@@ -177,11 +177,8 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 		}
 		return cached.hdr, http.StatusOK, nil // the cached Link header still names the next page
 	}
-	if res.StatusCode == http.StatusNotFound {
-		return res.Header, res.StatusCode, fmt.Errorf("%w: %s %s: HTTP 404", ErrNotFound, method, req.URL.Path)
-	}
 	if res.StatusCode >= 300 {
-		return res.Header, res.StatusCode, fmt.Errorf("ghapp: %s %s: HTTP %d", method, req.URL.Path, res.StatusCode)
+		return res.Header, res.StatusCode, statusError(method, req.URL.Path, res.StatusCode)
 	}
 	if method == http.MethodGet {
 		// Only a list answer with total_count is reused on a 304: total_count changes when the list
@@ -197,6 +194,14 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 		}
 	}
 	return res.Header, res.StatusCode, nil
+}
+
+// statusError is the error for an answer that is not a success; a 404 wraps ErrNotFound.
+func statusError(method, path string, code int) error {
+	if code == http.StatusNotFound {
+		return fmt.Errorf("%w: %s %s: HTTP 404", ErrNotFound, method, path)
+	}
+	return fmt.Errorf("ghapp: %s %s: HTTP %d", method, path, code)
 }
 
 // keep stores a GET answer for conditional requests, pruning entries unused for an hour once the
