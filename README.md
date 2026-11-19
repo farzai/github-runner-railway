@@ -104,7 +104,7 @@ RUNNER_LABEL=railway
 MAX_RUNNERS=2
 ```
 
-`/healthz` answers 200 once a cycle has completed, and 503 when the last cycle is older than three polls or `ALERT_FAILED_CYCLES` cycles in a row have failed. Its JSON: `last_cycle`, `last_success`, `consecutive_failures`, `unreadable_scopes`, `services`, `queued`, `error`. A scope GitHub answers 404 for (a deleted repository, a typo in `RUNNER_SCOPES`, or an App no longer installed there) is listed in `unreadable_scopes` and logged at warn each cycle, but does not fail the cycle; any other read error does. `github_rate_limits` shows the requests GitHub last reported left per installation account (a warning is logged once per window below a tenth). The log line `controller up` shows the scopes,
+`/healthz` answers 200 once a cycle has completed, and 503 when the last cycle is older than three polls or `ALERT_FAILED_CYCLES` cycles in a row have failed. Its JSON: `last_cycle`, `last_success`, `consecutive_failures`, `unreadable_scopes`, `services`, `queued`, `error`. A scope GitHub answers 404 for (a deleted repository, a typo in `RUNNER_SCOPES`, or an App no longer installed there) is listed in `unreadable_scopes` and logged at warn each cycle, but does not fail the cycle; after `ALERT_FAILED_CYCLES` cycles in a row it raises one alert of its own, and one more when it reads again. When every scope answers 404 (the App uninstalled, for example) the cycle fails, since nothing can be served. Any other read error fails the cycle too. `github_rate_limits` shows the requests GitHub last reported left per installation account (a warning is logged once per window below a tenth). The log line `controller up` shows the scopes,
 label, prefix, image and limits it runs with.
 
 ### 4. Use it in a workflow
@@ -146,7 +146,7 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `IDLE_TTL_SECONDS` | how long a surplus idle runner is kept | `120` |
 | `MAX_JOB_MINUTES` | job timeout; a service older than this plus 10 minutes is removed | `360` |
 | `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | log an alert (and POST `{"text": ...}` to the URL) when a job waits this long with no runner coming | `5` / none |
-| `ALERT_FAILED_CYCLES` | after this many failed cycles in a row: one alert (naming scopes unreadable that long), `/healthz` 503, and one "recovered" alert when a cycle succeeds again | `3` |
+| `ALERT_FAILED_CYCLES` | after this many failed cycles in a row: one alert (naming scopes unreadable that long), `/healthz` 503, and one "recovered" alert when a cycle succeeds again. A scope GitHub answers 404 for this many cycles in a row raises one alert of its own | `3` |
 | `PORT` | HTTP port | `8080` |
 
 ## The runner images
@@ -294,7 +294,7 @@ pin a version (or a digest, `image@sha256:...`) so a runner never changes under 
 | --- | --- |
 | The controller exits at start | its log names the missing or malformed variable (never its value) |
 | `/healthz` 503 | no cycle has completed yet, the last one is older than three polls, or cycles keep failing (`consecutive_failures`, `unreadable_scopes`); see the `cycle failed` log lines |
-| `/healthz` 200 but a scope in `unreadable_scopes` | GitHub answers 404 for it: the repository was deleted, the name in `RUNNER_SCOPES` is wrong, or the App is no longer installed there. See the `scope not found on GitHub; skipped` warn line, then fix or remove the scope. A renamed or transferred repository answers a redirect instead, which fails the cycle until `RUNNER_SCOPES` has the new name |
+| `/healthz` 200 but a scope in `unreadable_scopes` | GitHub answers 404 for it: the repository was deleted, the name in `RUNNER_SCOPES` is wrong, or the App is no longer installed there. See the `scope not found on GitHub; skipped` warn line and the `not found on GitHub for N cycles in a row` alert, then fix or remove the scope. If every scope answers 404, the cycles fail and `/healthz` goes 503: check the App is still installed. A renamed or transferred repository answers a redirect instead, which fails the cycle until `RUNNER_SCOPES` has the new name |
 | `/healthz` `"error": true` | the last cycle failed; the `cycle failed` log line says why (often a GitHub or Railway API error, which the next cycle retries) |
 | A job stays queued | the job's labels must all be among `self-hosted`, `linux`, `x64` and your label; its repository must be in `RUNNER_SCOPES` and the App installed on it; `MAX_RUNNERS` may be reached |
 | How often cycles run, and what they cost | every cycle logs one `cycle` line: `duration`, `github_calls`, `railway_calls`, `created`, `reaped`, `failed` |
