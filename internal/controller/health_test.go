@@ -82,8 +82,8 @@ func TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking(t *testing.T) {
 	rw := &fakeRW{}
 	c, alerts := alerting(gh, rw)
 	_ = c.Cycle(context.Background())
-	if got := c.Status().UnreadableScopes; len(got) != 1 || got[0] != org.Key() {
-		t.Fatalf("after one failed read: unreadable %v, want [%s]", got, org.Key())
+	if got := c.Status().UnreadableScopes; got != 1 {
+		t.Fatalf("after one failed read: unreadable %d, want 1", got)
 	}
 	for i := 0; i < 3; i++ {
 		_ = c.Cycle(context.Background())
@@ -92,7 +92,7 @@ func TestOneUnreadableScopeIsNamedAndTheOtherKeepsWorking(t *testing.T) {
 		t.Fatalf("alerts %q, want one naming only %s as unreadable that long", *alerts, org.Key())
 	}
 	_, body := health(t, c)
-	if got, _ := body["unreadable_scopes"].([]any); len(got) != 1 || got[0] != org.Key() {
+	if body["unreadable_scopes"] != float64(1) {
 		t.Fatalf("unreadable_scopes %v", body["unreadable_scopes"])
 	}
 	gh.jobs = map[string][]ghapp.Job{repo.Key(): {{ID: 9, Repo: "acme/app", CreatedAt: now}}}

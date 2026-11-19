@@ -89,8 +89,8 @@ type Status struct {
 	Queued              int
 	ConsecutiveFailures int
 	LastSuccess         time.Time
-	UnreadableScopes    []string // scopes that could not be read in the last cycle
-	Failing             bool     // ConsecutiveFailures reached FailAlertAfter
+	UnreadableScopes    int  // how many scopes the last cycle could not read; /healthz is public, so no names
+	Failing             bool // ConsecutiveFailures reached FailAlertAfter
 }
 
 // New builds a Controller.
@@ -408,13 +408,13 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 	}
 }
 
-// unreadableScopes are the scopes the last cycle could not read (a 404 included), and of those the
-// ones that failed for FailAlertAfter cycles or more for another reason.
-func (c *Controller) unreadableScopes() (unreadable, stuck []string) {
+// unreadableScopes counts the scopes the last cycle could not read (a 404 included), and names the
+// ones that failed for FailAlertAfter cycles or more for another reason, for the operator's alert.
+func (c *Controller) unreadableScopes() (unreadable int, stuck []string) {
 	for _, s := range c.cfg.Scopes {
 		n := c.scopeFails[s.Key()]
 		if n > 0 || c.missing[s.Key()] > 0 {
-			unreadable = append(unreadable, s.Key())
+			unreadable++
 		}
 		if n >= c.cfg.FailAlertAfter {
 			stuck = append(stuck, s.Key())
@@ -518,13 +518,9 @@ func (c *Controller) HealthHandler() http.Handler {
 		if !st.LastSuccess.IsZero() {
 			lastSuccess = st.LastSuccess
 		}
-		unreadable := st.UnreadableScopes
-		if unreadable == nil {
-			unreadable = []string{}
-		}
 		body := map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued,
 			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
-			"unreadable_scopes": unreadable}
+			"unreadable_scopes": st.UnreadableScopes}
 		if rl, ok := c.gh.(RateLimiter); ok {
 			body["github_rate_limits"] = rl.RateLimits()
 		}
