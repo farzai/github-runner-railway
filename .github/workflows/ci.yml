@@ -17,6 +17,76 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  # The engineering quality gates on the lines a pull request changes (.quality/README.md): gofmt, coverage of changed
+  # lines, CRAP, duplication and mutation. A pull request runs its own copy of the gate, so review of .quality/ and
+  # .github/ is the control. GitHub-hosted runners are not metered on a public repository, so the timeout leaves room
+  # for the gate's 30-minute mutation cap; a typical change takes a few minutes.
+  quality:
+    name: quality gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Render the pull request description
+        # The gate reads "Equivalent mutant:" waivers from GitHub's own rendering of the description (POST /markdown,
+        # gfm), so a waiver counts only where a reviewer sees it on the PR page. Fetched now rather than taken from the
+        # event, so a re-run after editing the description sees the edit. This is the only step that gets the token,
+        # and it runs before any code from the pull request. python3 -I keeps the checkout off sys.path. The HTML's
+        # sha256 is a step output, which no later step can change, so code from the pull request cannot rewrite the
+        # file unnoticed. A failed fetch or render fails the job.
+        id: description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.url }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          set -o pipefail
+          curl --proto '=https' --tlsv1.2 --retry 5 --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" --header "Accept: application/vnd.github+json" "$PR_URL" \
+            | python3 -I -c 'import json, sys; json.dump({"text": json.load(sys.stdin)["body"] or "", "mode": "gfm"}, sys.stdout)' \
+            | curl --proto '=https' --tlsv1.2 --retry 5 --fail --silent --show-error \
+                --header "Authorization: Bearer $GH_TOKEN" --header "Accept: application/vnd.github+json" \
+                --header "Content-Type: application/json" --data-binary @- "$API_URL/markdown" \
+            > "$RUNNER_TEMP/pr-body.html"
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/pr-body.html" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      # Code from the pull request runs from here on, so neither setup action gets the token.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          token: ''
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          token: ''
+      - name: Install quality tools
+        # Pinned commits and versions in .quality/requirements.txt, in a venv that is thrown away with the job.
+        run: |
+          python -m venv "$RUNNER_TEMP/quality-venv"
+          "$RUNNER_TEMP/quality-venv/bin/pip" install --quiet -r .quality/requirements.txt
+      - name: Gate self-tests
+        run: |
+          export PATH="$RUNNER_TEMP/quality-venv/bin:$PATH"
+          python -m unittest discover -s .quality -p 'test_*.py'
+      - name: Tests with coverage
+        # Without -coverpkg, as mutant-tests.sh tests only the mutated package: a line counts as covered only when its
+        # own package's tests run it.
+        run: |
+          mkdir -p target/coverage
+          go test -count=1 -coverprofile=target/coverage/profile.out ./...
+      - name: Quality gate
+        env:
+          DESCRIPTION_SHA256: ${{ steps.description.outputs.sha256 }}
+        run: |
+          export PATH="$RUNNER_TEMP/quality-venv/bin:$PATH"
+          python .quality/gate.py --description-html "$RUNNER_TEMP/pr-body.html" --description-sha256 "$DESCRIPTION_SHA256"
+
   # Which images this push or pull request changes. The runner images are rebuilt only when
   # image/ changes, the controller only when the Go code or its Dockerfile changes; this workflow
   # changing, a version tag, or a push with no usable base rebuilds all three.
