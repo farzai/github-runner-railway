@@ -1,0 +1,29 @@
+{
+  "measuredOn": "main 08061db, 2026-11-21, with the commands in .quality/README.md; the full mutation run went one file at a time with .quality/mutant-tests.sh and 2 workers",
+  "coverage": { "lines": 87.88, "metric": "statement coverage of cmd/ and internal/ without tests, as go tool cover -func totals it" },
+  "functionsMeasured": 59,
+  "functionsOverCrap10": 10,
+  "functionsOverCrap10List": [
+    "cmd/controller/main.go main 56.0",
+    "internal/reconcile/reconcile.go Make 33.0",
+    "internal/config/config.go Load 25.0",
+    "internal/ghapp/ghapp.go Client.call 19.2",
+    "internal/controller/controller.go Controller.alertLate 17.0",
+    "internal/controller/controller.go Controller.Cycle 15.2",
+    "internal/controller/controller.go Controller.Run 13.0",
+    "internal/ghapp/ghapp.go Client.installToken 12.0",
+    "internal/ghapp/ghapp.go Client.each 11.0",
+    "internal/config/config.go parseScope 11.0"
+  ],
+  "duplicatePairs": 0,
+  "mutation": {
+    "scope": "full run: every mutation site in cmd/ and internal/ without tests, each mutant tested with its own package's tests",
+    "sites": 425,
+    "killed": 293,
+    "survived": 102,
+    "uncovered": 30,
+    "score": 74.18,
+    "scoreMetric": "killed / (killed + survived); uncovered sites are never mutated (14 of them are in func main)",
+    "seconds": 707
+  }
+}

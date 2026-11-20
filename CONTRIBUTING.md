@@ -31,7 +31,10 @@ docker build --platform linux/amd64 --target pg -t runner-pg image/
   title (`feat: ...`, `fix(reconcile): ...`, `docs: ...`).
 * Update README.md, docs/deploy.md and the `[Unreleased]` section of CHANGELOG.md when behaviour or
   configuration changes.
-* CI runs `go vet`, the tests with the race detector, and builds the three images.
+* CI runs `go vet`, the tests with the race detector, and builds the images.
+* CI also runs the quality gate on the lines a pull request changes: gofmt, test coverage of
+  every changed line, CRAP under 10, no new duplicate, and no surviving mutant. See
+  [.quality/README.md](.quality/README.md) for the rules, the waivers and how to run it locally.
 
 ## Releases
 
