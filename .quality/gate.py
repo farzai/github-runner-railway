@@ -270,10 +270,12 @@ def parse_profile(text: str) -> dict[str, list[Block]]:
 
 
 def line_hits(blocks: list[Block]) -> dict[int, bool]:
-    """Executable line -> whether a test ran it: a line is executable when a block spans it, and hit when any block
-    that spans it ran."""
+    """Executable line -> whether a test ran it: a line is executable when a block with a statement spans it, and hit
+    when any such block that spans it ran. An empty function is a block of 0 statements, with nothing to run."""
     hits: dict[int, bool] = {}
     for block in blocks:
+        if not block.statements:
+            continue
         for line in range(block.start_line, block.end_line + 1):
             hits[line] = hits.get(line, False) or block.count > 0
     return hits

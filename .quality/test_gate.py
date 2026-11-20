@@ -218,6 +218,10 @@ class Profile(unittest.TestCase):
         hits = gate.line_hits(gate.parse_profile(gate.relative_profile(PROFILE, MODULE))[LIB])
         self.assertEqual(hits, {3: True, 4: True, 5: True, 6: False, 7: False, 9: True})
 
+    def test_a_block_without_statements_is_not_executable(self) -> None:
+        # go test lists an empty function as a block of 0 statements; there is nothing in it to run.
+        self.assertEqual(gate.line_hits([gate.Block(3, 20, 3, 22, 0, 0)]), {})
+
     def test_repo_coverage_counts_statements_once_in_scope(self) -> None:
         blocks = gate.parse_profile(gate.relative_profile(PROFILE, MODULE))
         # core.go: 2 hit + 1 missed + 1 (the duplicate block, hit once) ; main.go: 1 missed -> 3 of 5

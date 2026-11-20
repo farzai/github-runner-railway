@@ -3,3 +3,4 @@
 .env
 /target/
 /.metrics/
+__pycache__/
