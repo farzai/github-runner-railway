@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -182,6 +184,14 @@ class Format(InRepo):
         ok, lines = gate.check_format(gate.changed_go_files(self.base))
         self.assertTrue(ok, lines)
 
+    def test_a_file_gofmt_cannot_parse_fails_with_its_message(self) -> None:
+        self.write("internal/core/broken.go", "package core\nfunc {\n")
+        self.commit()
+        ok, lines = gate.check_format(gate.changed_go_files(self.base))
+        self.assertFalse(ok)
+        self.assertTrue(lines[0].startswith("gofmt failed (exit 2)"), lines)
+        self.assertIn("broken.go", lines[1])
+
     def test_no_changed_file_passes(self) -> None:
         self.assertEqual(gate.check_format([]), (True, ["No Go file was added or changed."]))
 
@@ -231,6 +241,12 @@ class Profile(unittest.TestCase):
         # core.go: 2 hit + 1 missed + 1 (the duplicate block, hit once) ; main.go: 1 missed -> 3 of 5
         self.assertEqual(gate.repo_line_coverage(blocks), 60.0)
 
+    def test_a_block_listed_twice_counts_as_run_when_either_listing_ran(self) -> None:
+        missed, hit = gate.Block(1, 1, 2, 2, 3, 0), gate.Block(1, 1, 2, 2, 3, 2)
+        self.assertEqual(gate.repo_line_coverage({LIB: [missed, hit]}), 100.0)
+        self.assertEqual(gate.repo_line_coverage({LIB: [hit, missed]}), 100.0)
+        self.assertEqual(gate.repo_line_coverage({LIB: [missed, missed]}), 0.0)
+
     def test_repo_coverage_leaves_out_files_outside_the_scope(self) -> None:
         blocks = {"examples/derived/main.go": [gate.Block(1, 1, 2, 2, 5, 0)], LIB: [gate.Block(1, 1, 2, 2, 1, 1)]}
         self.assertEqual(gate.repo_line_coverage(blocks), 100.0)
@@ -257,6 +273,11 @@ class UncoveredChangedLines(unittest.TestCase):
         source = "package core\n\nfunc F() {\n\tif x {\n\n\t\t// why\n\t\ty()\n\t}\n}\n"
         blocks = {LIB: [gate.Block(4, 7, 8, 3, 1, 0)]}
         self.assertEqual(gate.uncovered_changed({LIB: [(4, 8)]}, blocks, lambda _p: source), [(LIB, 4), (LIB, 7)])
+
+    def test_the_last_line_of_the_file_can_be_inert(self) -> None:
+        source = "package core\n\nfunc F() {\n\ty()\n}"
+        blocks = {LIB: [gate.Block(3, 10, 5, 2, 1, 0)]}
+        self.assertEqual(gate.uncovered_changed({LIB: [(3, 5)]}, blocks, lambda _p: source), [(LIB, 3), (LIB, 4)])
 
     def test_lines_outside_every_block_are_not_executable(self) -> None:
         self.assertEqual(gate.uncovered_changed({LIB: [(1, 2), (8, 8)]}, self.blocks(), lambda _p: CODE), [])
@@ -444,6 +465,10 @@ class FunctionNames(unittest.TestCase):
     def test_a_method_is_named_by_its_receiver(self) -> None:
         self.assertEqual(gate.qualified("github.com/acme/app/internal/ghapp.Client", "call"), "Client.call")
 
+    def test_a_namespace_without_a_slash_still_names_the_receiver(self) -> None:
+        self.assertEqual(gate.qualified("core.T", "F"), "T.F")
+        self.assertEqual(gate.qualified("main", "main"), "main")
+
     def test_a_function_is_named_alone(self) -> None:
         self.assertEqual(gate.qualified("github.com/acme/app/internal/config", "Load"), "Load")
 
@@ -585,6 +610,16 @@ class Workers(unittest.TestCase):
         self.assertEqual(self.quota(None), 8)
         self.assertEqual(self.quota("garbage"), 8)
 
+    def test_a_quota_under_one_cpu_still_runs_one_worker(self) -> None:
+        self.assertEqual(self.quota("50000 100000\n"), 1)
+
+    def test_the_cores_come_from_the_os_when_not_given(self) -> None:
+        missing = Path("/nonexistent/cpu.max")
+        with mock.patch.object(gate.os, "cpu_count", return_value=4):
+            self.assertEqual(gate.cpu_workers(missing), 4)
+        with mock.patch.object(gate.os, "cpu_count", return_value=None):
+            self.assertEqual(gate.cpu_workers(missing), 1)
+
     def test_a_quota_above_the_cores_uses_the_cores(self) -> None:
         self.assertEqual(self.quota("1600000 100000\n"), 8)
 
@@ -721,6 +756,125 @@ class MutantTests(InRepo):
     def test_the_unchanged_file_logs_nothing(self) -> None:
         self.assertEqual(self.run_mutant((self.repo / LIB).read_text()), 0)
         self.assertFalse(self.log.exists())
+
+
+class KillTagged(unittest.TestCase):
+    def test_only_processes_that_carry_the_tag_are_killed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)
+            for pid, environ in (("101", b"A=1\0QUALITY_GATE_TAG=abc\0"), ("102", b"QUALITY_GATE_TAG=other\0"), ("self", b"")):
+                (proc / pid).mkdir()
+                (proc / pid / "environ").write_bytes(environ)
+            (proc / "103").mkdir()  # no environ: unreadable, skipped
+            with mock.patch.object(gate.os, "kill") as kill:
+                self.assertEqual(gate._kill_pass("abc", proc), 1)
+            kill.assert_called_once_with(101, gate.signal.SIGKILL)
+
+    def test_without_proc_nothing_is_killed(self) -> None:
+        self.assertEqual(gate._kill_pass("abc", Path("/nonexistent/proc")), 0)
+
+
+TOOLS = all(shutil.which(tool) for tool in ("go", "gofmt", "dryer", "mutator"))
+
+COMPLEX = textwrap.dedent(
+    """\
+    package core
+
+    // Grade is over the CRAP limit on base already.
+    func Grade(n int) string {
+    \tswitch {
+    \tcase n > 90:
+    \t\treturn "a"
+    \tcase n > 80:
+    \t\treturn "b"
+    \tcase n > 70:
+    \t\treturn "c"
+    \tcase n > 60:
+    \t\treturn "d"
+    \tcase n > 50:
+    \t\treturn "e"
+    \tcase n > 40:
+    \t\treturn "f"
+    \tcase n > 30:
+    \t\treturn "g"
+    \tcase n > 20:
+    \t\treturn "h"
+    \tcase n > 10:
+    \t\treturn "i"
+    \tcase n > 5:
+    \t\treturn "j"
+    \t}
+    \treturn "k"
+    }
+    """
+)
+
+
+@unittest.skipUnless(TOOLS, "go, dryer or mutator is not on the PATH")
+class EndToEnd(InRepo):
+    """gate.py run as CI runs it, on a throwaway Go module, with the real tools."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(LIB, COMPLEX)
+        self.write("internal/core/core_test.go", 'package core\n\nimport "testing"\n\nfunc TestGrade(t *testing.T) {\n\tif Grade(95) != "a" {\n\t\tt.Fatal()\n\t}\n}\n')
+        shutil.copytree(HERE, self.repo / ".quality", ignore=shutil.ignore_patterns("__pycache__"))
+        (self.repo / ".quality/baseline.json").write_text('{"coverage": {"lines": 50.0}, "duplicatePairs": 0}\n')
+        self.write(".gitignore", "/target/\n/.metrics/\n")
+        self.commit()
+        self.base = git(self.repo, "rev-parse", "HEAD")
+
+    def gate(self, *args: str) -> tuple[int, str]:
+        (self.repo / "target/coverage").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["go", "test", "-count=1", "-coverprofile=target/coverage/profile.out", "./..."], cwd=self.repo, check=True, capture_output=True)
+        out = io.StringIO()
+        argv = ["gate.py", "--base", self.base, *args]
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(self.repo / "summary.md")}), \
+                contextlib.redirect_stdout(out):
+            code = gate.main()
+        return code, out.getvalue()
+
+    def test_an_old_function_over_the_limit_passes_when_no_worse(self) -> None:
+        self.set_lines([line.replace("case n > 90:", "case n >= 91:") for line in self.lines()])
+        self.commit()
+        code, out = self.gate("--skip-mutation")
+        self.assertEqual(code, 0, out)
+        self.assertIn("still over the limit, no worse than base", out)
+        self.assertIn("### Mutation: pass", (self.repo / "summary.md").read_text())
+
+    def test_a_new_untested_complex_duplicated_unformatted_change_fails_every_check(self) -> None:
+        self.write("internal/core/more.go", COMPLEX.replace("Grade", "Mark").replace("package core\n", "package core\nfunc  Pad( ) {  }\n"))
+        self.commit()
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        for failed in ("### Format: FAIL", "### Coverage: FAIL", "### CRAP: FAIL", "### Duplication: FAIL", "### Mutation: FAIL"):
+            self.assertIn(failed, out)
+        self.assertIn("Not run: an earlier check failed", out)
+
+    def test_a_tested_change_is_mutated_and_a_weak_test_fails(self) -> None:
+        self.write("internal/core/abs.go", "package core\n\n// Abs returns the size of n.\nfunc Abs(n int) int {\n\tif n > 0 {\n\t\treturn n\n\t}\n\treturn -n\n}\n")
+        self.write("internal/core/abs_test.go", 'package core\n\nimport "testing"\n\nfunc TestAbs(t *testing.T) {\n\tif Abs(3) != 3 || Abs(-3) != 3 {\n\t\tt.Fatal()\n\t}\n}\n')
+        self.commit()
+        code, out = self.gate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("### Mutation: FAIL", out)
+        self.assertIn("survivor internal/core/abs.go:5 > -> >= (NOT explained)", out)
+        self.assertNotIn("### CRAP: FAIL", out)
+
+    def test_no_go_change_judges_nothing(self) -> None:
+        self.write("docs/notes.md", "notes\n")
+        self.commit()
+        code, out = self.gate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("No lines were added or changed in Go source", out)
+
+    def test_a_base_that_cannot_be_scored_fails_crap(self) -> None:
+        self.set_lines([line.replace("case n > 90:", "case n >= 91:") for line in self.lines()])
+        self.commit()
+        with mock.patch.object(gate, "write_coverage", side_effect=gate.BaseNotScored("the coverage run failed (exit 1)")):
+            ok, lines = gate.check_crap({LIB: [(6, 6)]}, self.repo, self.base)
+        self.assertFalse(ok)
+        self.assertIn("Base not scored: the coverage run failed (exit 1)", lines[-1])
 
 
 if __name__ == "__main__":

@@ -284,16 +284,17 @@ def line_hits(blocks: list[Block]) -> dict[int, bool]:
 def repo_line_coverage(profile: dict[str, list[Block]]) -> float:
     """Statement coverage of the scope, in percent with two decimals, as go tool cover -func totals it. A block listed
     more than once (one package's tests and another's) counts once, as run when any listing ran."""
-    ran: dict[tuple[str, int, int, int, int], tuple[int, bool]] = {}
+    statements: dict[tuple[str, int, int, int, int], int] = {}
+    ran: dict[tuple[str, int, int, int, int], bool] = {}
     for path, blocks in profile.items():
         if not in_scope(path):
             continue
         for block in blocks:
             key = (path, *block[:4])
-            _statements, before = ran.get(key, (0, False))
-            ran[key] = (block.statements, before or block.count > 0)
-    total = sum(statements for statements, _ in ran.values())
-    hit = sum(statements for statements, was_run in ran.values() if was_run)
+            statements[key] = block.statements
+            ran[key] = ran.get(key, False) or block.count > 0
+    total = sum(statements.values())
+    hit = sum(count for key, count in statements.items() if ran[key])
     return round(100.0 * hit / total, 2) if total else 100.0
 
 
@@ -332,19 +333,22 @@ def uncovered_changed(changed: Ranges, profile: dict[str, list[Block]], read_sou
     found: list[tuple[str, int]] = []
     for path, ranges in sorted(changed.items()):
         source = read_source(path)
-        if path not in profile:
-            if source is None or has_code(source):
-                found.append((path, 0))
-            continue
-        text = source.splitlines() if source is not None else []
-        hits = line_hits(profile[path])
-        found.extend(
-            (path, number)
-            for number in sorted(hits)
-            if not hits[number] and touches(ranges, number, number)
-            and not (number <= len(text) and INERT.match(text[number - 1]))
-        )
+        if path in profile:
+            found.extend((path, number) for number in untested_lines(ranges, profile[path], source or ""))
+        elif source is None or has_code(source):
+            found.append((path, 0))
     return found
+
+
+def untested_lines(ranges: list[tuple[int, int]], blocks: list[Block], source: str) -> list[int]:
+    """The changed lines of one file that a block spans, that no block which ran spans, and that are not inert."""
+    text = source.splitlines()
+
+    def inert(number: int) -> bool:
+        return number <= len(text) and INERT.match(text[number - 1]) is not None
+
+    hits = line_hits(blocks)
+    return [n for n in sorted(hits) if not hits[n] and touches(ranges, n, n) and not inert(n)]
 
 
 def read_text(path: str) -> str | None:
