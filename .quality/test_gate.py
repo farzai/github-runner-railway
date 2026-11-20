@@ -156,6 +156,10 @@ class ChangedRanges(InRepo):
             gate.changed_ranges(self.base)
         self.assertIn("could not read the changed lines", str(raised.exception))
 
+    def test_an_explicit_base_is_resolved_to_its_commit(self) -> None:
+        git(self.repo, "tag", "start", self.base)
+        self.assertEqual(gate.resolve_base("start"), self.base)
+
     def test_changed_go_files_include_tests_for_the_format_check(self) -> None:
         self.write("internal/core/core_test.go", "package core\n")
         self.set_lines(self.lines() + ["const Added = 11"])

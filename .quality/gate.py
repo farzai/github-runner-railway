@@ -95,7 +95,7 @@ def resolve_base(explicit: str | None) -> str:
         return run(["git", "rev-parse", "HEAD^1"]).stdout.strip()
     if not explicit:
         sys.exit("HEAD is not a merge commit; pass --base <sha>")
-    return explicit
+    return run(["git", "rev-parse", "--verify", f"{explicit}^{{commit}}"]).stdout.strip()
 
 
 def go_file(path: str) -> bool:
