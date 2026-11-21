@@ -454,6 +454,7 @@ func (c *Client) orgRepos(ctx context.Context, s reconcile.Scope, tok string) ([
 // adding its own. A run that vanished after the runs listing is skipped.
 func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]bool) ([]Job, error) {
 	var out []Job
+	listed := map[int64]bool{}
 	// A run waiting to start reports "pending" (behind a concurrency group, say) while its
 	// jobs are already queued, so pending runs are read too.
 	for _, status := range []string{"queued", "pending", "in_progress"} {
@@ -467,18 +468,58 @@ func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]
 			func() any { runs.Runs = nil; return &runs }, func() {
 				for _, r := range runs.Runs {
 					runIDs = append(runIDs, r.ID)
+					listed[r.ID] = true
 				}
 			})
 		if err != nil {
 			return nil, err
 		}
-		for _, id := range runIDs {
-			jobs, err := c.runJobs(ctx, repo, id, tok, seen)
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			out = append(out, jobs...)
+		jobs, err := c.jobsOfRuns(ctx, repo, runIDs, tok, seen)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, jobs...)
+	}
+	unlisted, err := c.unlistedJobs(ctx, repo, tok, listed, seen)
+	return append(out, unlisted...), err
+}
+
+// unlistedJobs are the queued jobs of runs that GitHub's status filter left out of every listing
+// (it did on 2026-11-21, for 25 minutes): it reads the first page of the unfiltered runs list, the
+// newest runs, once with no paging, and the jobs of each run that is not completed and was not
+// listed. A run pushed off that page by newer runs is never found here.
+func (c *Client) unlistedJobs(ctx context.Context, repo, tok string, listed, seen map[int64]bool) ([]Job, error) {
+	var runs struct {
+		Runs []struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		} `json:"workflow_runs"`
+	}
+	if _, _, err := c.call(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/actions/runs?per_page=20", c.cfg.BaseURL, repo), tok, nil, &runs); err != nil {
+		return nil, err
+	}
+	var runIDs []int64
+	for _, r := range runs.Runs {
+		if r.Status != "completed" && !listed[r.ID] {
+			runIDs = append(runIDs, r.ID)
+		}
+	}
+	jobs, err := c.jobsOfRuns(ctx, repo, runIDs, tok, seen)
+	for i := range jobs {
+		jobs[i].Unlisted = true
+	}
+	return jobs, err
+}
+
+// jobsOfRuns are the queued jobs with our label in the runs, skipping a run that vanished.
+func (c *Client) jobsOfRuns(ctx context.Context, repo string, runIDs []int64, tok string, seen map[int64]bool) ([]Job, error) {
+	var out []Job
+	for _, id := range runIDs {
+		jobs, err := c.runJobs(ctx, repo, id, tok, seen)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		out = append(out, jobs...)
 	}
 	return out, nil
 }
