@@ -116,3 +116,20 @@ func TestTheFallbackSkipsAVanishedRunAndFailsOnOtherErrors(t *testing.T) {
 		}
 	}
 }
+
+// A jobs read that fails on a run the filtered lists found fails the read, as it always has.
+func TestAFailedJobsReadOfAListedRunFailsTheRead(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "queued":
+			io.WriteString(w, `{"workflow_runs":[{"id":11}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
+			io.WriteString(w, `{"workflow_runs":[]}`)
+		default:
+			w.WriteHeader(500)
+		}
+	}}
+	if jobs, err := newGH(t, f).QueuedJobs(context.Background(), repo); err == nil {
+		t.Fatalf("jobs %+v, want the 500 on the jobs read reported", jobs)
+	}
+}

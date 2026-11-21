@@ -213,7 +213,8 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	}()
 	now := c.now()
 	began, ghBefore, rwBefore := time.Now(), calls(c.gh), calls(c.rw)
-	created, reaped, unlisted := 0, 0, 0
+	created, reaped := 0, 0
+	var unlisted int // set once the scopes are read; the log line below reads it when the cycle ends
 	defer func() {
 		c.cfg.Log.Info("cycle", "duration", time.Since(began).Round(time.Millisecond).String(), "github_calls", calls(c.gh)-ghBefore,
 			"railway_calls", calls(c.rw)-rwBefore, "created", created, "reaped", reaped, "unlisted", unlisted, "failed", err != nil)
