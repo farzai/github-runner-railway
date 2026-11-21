@@ -90,6 +90,7 @@ type Status struct {
 	ConsecutiveFailures int
 	LastSuccess         time.Time
 	UnreadableScopes    int  // how many scopes the last cycle could not read; /healthz is public, so no names
+	UnlistedJobs        int  // queued jobs the last cycle found only because GitHub's status filter left their run out
 	Failing             bool // ConsecutiveFailures reached FailAlertAfter
 }
 
@@ -212,17 +213,18 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	}()
 	now := c.now()
 	began, ghBefore, rwBefore := time.Now(), calls(c.gh), calls(c.rw)
-	created, reaped := 0, 0
+	created, reaped, unlisted := 0, 0, 0
 	defer func() {
 		c.cfg.Log.Info("cycle", "duration", time.Since(began).Round(time.Millisecond).String(), "github_calls", calls(c.gh)-ghBefore,
-			"railway_calls", calls(c.rw)-rwBefore, "created", created, "reaped", reaped, "failed", err != nil)
+			"railway_calls", calls(c.rw)-rwBefore, "created", created, "reaped", reaped, "unlisted", unlisted, "failed", err != nil)
 	}()
 	rd := c.readScopes(ctx)
+	unlisted = c.warnUnlisted(rd.jobs)
 	errs, queued, runners, jobsOf, readable := rd.errs, rd.queued, rd.runners, rd.jobs, rd.readable
 	all, err := c.rw.List(ctx)
 	if err != nil {
 		errs = append(errs, err)
-		c.record(now, errs, 0, 0)
+		c.record(now, errs, 0, 0, unlisted)
 		return errors.Join(errs...)
 	}
 	ok := map[string]bool{}
@@ -269,7 +271,7 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	for _, n := range queued {
 		total += n
 	}
-	c.record(now, errs, len(services)+len(plan.Create)-len(plan.Reap), total)
+	c.record(now, errs, len(services)+len(plan.Create)-len(plan.Reap), total, unlisted)
 	return errors.Join(errs...)
 }
 
@@ -280,6 +282,21 @@ type scopeReads struct {
 	runners  map[string][]reconcile.Runner
 	jobs     map[string][]ghapp.Job
 	errs     []error // the errors that fail the cycle
+}
+
+// warnUnlisted logs each queued job found only because GitHub's status filter left its run out, so
+// the gap on GitHub's side stays visible, and returns how many there were.
+func (c *Controller) warnUnlisted(jobs map[string][]ghapp.Job) int {
+	n := 0
+	for _, js := range jobs {
+		for _, j := range js {
+			if j.Unlisted {
+				n++
+				c.cfg.Log.Warn("queued job missing from GitHub's status-filtered run list", "job", j.ID, "repo", j.Repo)
+			}
+		}
+	}
+	return n
 }
 
 // readScopes reads every scope, records how each went, and raises or clears the missing-scope alerts.
@@ -380,7 +397,7 @@ func (c *Controller) readScope(ctx context.Context, s reconcile.Scope) ([]ghapp.
 // alert when FailAlertAfter cycles in a row have failed, naming the scopes unreadable for that long,
 // and one message when a cycle succeeds again. A failed cycle still stamps LastCycle (the loop is
 // alive); ConsecutiveFailures is what tells a failing controller from a working one.
-func (c *Controller) record(now time.Time, errs []error, services, queued int) {
+func (c *Controller) record(now time.Time, errs []error, services, queued, unlisted int) {
 	if len(errs) > 0 {
 		c.failures++
 	} else {
@@ -389,7 +406,7 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int) {
 	}
 	unreadable, stuck := c.unreadableScopes()
 	st := &Status{LastCycle: now, Services: services, Queued: queued, ConsecutiveFailures: c.failures,
-		LastSuccess: c.lastSuccess, UnreadableScopes: unreadable, Failing: c.failures >= c.cfg.FailAlertAfter}
+		LastSuccess: c.lastSuccess, UnreadableScopes: unreadable, UnlistedJobs: unlisted, Failing: c.failures >= c.cfg.FailAlertAfter}
 	if len(errs) > 0 {
 		st.LastError = errors.Join(errs...).Error()
 	}
@@ -520,7 +537,7 @@ func (c *Controller) HealthHandler() http.Handler {
 		}
 		body := map[string]any{"last_cycle": st.LastCycle, "services": st.Services, "queued": st.Queued,
 			"error": st.LastError != "", "consecutive_failures": st.ConsecutiveFailures, "last_success": lastSuccess,
-			"unreadable_scopes": st.UnreadableScopes}
+			"unreadable_scopes": st.UnreadableScopes, "unlisted_jobs": st.UnlistedJobs}
 		if rl, ok := c.gh.(RateLimiter); ok {
 			body["github_rate_limits"] = rl.RateLimits()
 		}
