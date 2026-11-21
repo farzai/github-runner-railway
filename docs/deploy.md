@@ -150,7 +150,9 @@ touched (tested in `internal/railway`). Still:
   `pending`, `in_progress`, and the 20 newest runs unfiltered, since GitHub's status filter can leave
   a queued run out), the jobs of each active run and the runner list; unchanged lists come back as
   `304` and do not count. A repository with recent activity changes its unfiltered page, so that read
-  counts once a cycle. The cache of unchanged lists holds 2,000 entries, so past about 500
+  counts once a cycle. When that unfiltered read fails (a 5xx, or a 403 at the rate limit), the
+  repository is still served from its filtered lists for that cycle, and the failure is logged and
+  counted rather than failing the scope. The cache of unchanged lists holds 2,000 entries, so past about 500
   repositories in one controller every read counts; prefer `repo:` scopes there. `/healthz`
   shows `github_rate_limits`, and a warning is logged below a tenth.
 * **Railway per-service limits** (Railway docs, plans, read 2026-10-17): up to 48 vCPU and 48 GB per

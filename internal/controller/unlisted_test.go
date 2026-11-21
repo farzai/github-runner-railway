@@ -74,6 +74,43 @@ func TestACycleThatFailsOnRailwayStillCountsUnlistedJobs(t *testing.T) {
 	}
 }
 
+// A failed fallback read (the unfiltered run list answering 500 or 403) does not fail the scope: the
+// jobs the filtered lists found still get their runners, each failure is logged at warn with its
+// repository and status, and the cycle line and /healthz count them. The next clean cycle clears it.
+func TestAFailedFallbackReadKeepsTheListedJobsAndIsCounted(t *testing.T) {
+	gh := &fakeGH{
+		jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 2, Repo: "acme/app", CreatedAt: now}}},
+		jobsErr: map[string]error{repo.Key(): &ghapp.UnlistedReadError{Failed: []ghapp.UnlistedReadFailure{
+			{Repo: "acme/app", Status: 500}, {Repo: "acme/lib", Status: 403}}}},
+	}
+	rw := &fakeRW{}
+	var buf bytes.Buffer
+	c := newC(gh, rw)
+	c.cfg.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	if err := c.Cycle(context.Background()); err != nil {
+		t.Fatalf("err %v, want a failed fallback read not to fail the cycle", err)
+	}
+	if len(rw.created) != 1 {
+		t.Fatalf("created %v, want a runner for the listed job", rw.created)
+	}
+	out := buf.String()
+	for _, want := range []string{"unlisted_read_failed=2", "failed=false", "repo=acme/app status=500", "repo=acme/lib status=403"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q lacks %s", out, want)
+		}
+	}
+	code, body := health(t, c)
+	if code != 200 || body["unlisted_read_failures"] != float64(2) || body["unreadable_scopes"] != float64(0) || body["consecutive_failures"] != float64(0) {
+		t.Fatalf("healthz %d %v, want 200, unlisted_read_failures 2 and the scope readable", code, body)
+	}
+
+	gh.jobsErr = nil
+	_ = c.Cycle(context.Background())
+	if _, body = health(t, c); body["unlisted_read_failures"] != float64(0) {
+		t.Fatalf("healthz %v after a clean cycle, want 0", body)
+	}
+}
+
 // /healthz counts the services left after the cycle: a reaped one is gone.
 func TestHealthzServicesLeaveOutAReapedService(t *testing.T) {
 	name := "rr-" + repo.Hash() + "-aaaaaa"
