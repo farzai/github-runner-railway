@@ -33,7 +33,7 @@ func (r *countedRW) Calls() int64 { return r.n }
 // Every cycle logs one summary line: how long it took, the API calls it made to GitHub and
 // Railway, and what it created and reaped, so the cycle rate and its cost can be read from logs.
 func TestEveryCycleLogsOneSummaryLine(t *testing.T) {
-	gh := &countedGH{fakeGH: fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "acme/app", CreatedAt: now}}}}}
+	gh := &countedGH{fakeGH: fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "acme/app", CreatedAt: now}}}}, n: 100}
 	rw := &countedRW{n: 10}
 	var buf bytes.Buffer
 	c := newC(&gh.fakeGH, &rw.fakeRW)

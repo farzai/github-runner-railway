@@ -146,8 +146,12 @@ touched (tested in `internal/railway`). Still:
   calls (create, configure, deploy, delete) and every cycle one list call; controllers that share a
   token share its budget. At 1,000 an hour and the default poll that is roughly 230 jobs an hour.
 * **GitHub API**: 5,000 requests an hour per installation (more above 20 repositories), shared by
-  every scope of that installation. A cycle reads, per repository, two run lists, the jobs of each
-  active run and the runner list; unchanged lists come back as `304` and do not count. `/healthz`
+  every scope of that installation. A cycle reads, per repository, four run lists (`queued`,
+  `pending`, `in_progress`, and the 20 newest runs unfiltered, since GitHub's status filter can leave
+  a queued run out), the jobs of each active run and the runner list; unchanged lists come back as
+  `304` and do not count. A repository with recent activity changes its unfiltered page, so that read
+  counts once a cycle. The cache of unchanged lists holds 2,000 entries, so past about 500
+  repositories in one controller every read counts; prefer `repo:` scopes there. `/healthz`
   shows `github_rate_limits`, and a warning is logged below a tenth.
 * **Railway per-service limits** (Railway docs, plans, read 2026-10-17): up to 48 vCPU and 48 GB per
   service on Hobby, 1,000 vCPU and 1 TB on Pro, 100 GB ephemeral storage, image size 100 GB on Hobby.
