@@ -397,6 +397,7 @@ type Job struct {
 	ID        int64
 	Repo      string
 	CreatedAt time.Time
+	Unlisted  bool // found only through the unfiltered runs list: GitHub's status filter left its run out
 }
 
 // QueuedJobs are the queued jobs with our label in the scope's repositories: every repository
