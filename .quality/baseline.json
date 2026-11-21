@@ -1,6 +1,6 @@
 {
   "measuredOn": "main 08061db, 2026-11-21, with the commands in .quality/README.md; the full mutation run went one file at a time with .quality/mutant-tests.sh and 2 workers",
-  "coverage": { "lines": 87.88, "metric": "statement coverage of cmd/ and internal/ without tests, as go tool cover -func totals it" },
+  "coverage": { "lines": 89.19, "metric": "statement coverage of cmd/ and internal/ without tests, as go tool cover -func totals it" },
   "functionsMeasured": 59,
   "functionsOverCrap10": 10,
   "functionsOverCrap10List": [

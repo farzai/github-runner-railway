@@ -199,9 +199,27 @@ func (c *Client) call(ctx context.Context, method, rawURL, bearer string, body a
 // statusError is the error for an answer that is not a success; a 404 wraps ErrNotFound.
 func statusError(method, path string, code int) error {
 	if code == http.StatusNotFound {
-		return fmt.Errorf("%w: %s %s: HTTP 404", ErrNotFound, method, path)
+		return &httpError{code: code, err: fmt.Errorf("%w: %s %s: HTTP 404", ErrNotFound, method, path)}
 	}
-	return fmt.Errorf("ghapp: %s %s: HTTP %d", method, path, code)
+	return &httpError{code: code, err: fmt.Errorf("ghapp: %s %s: HTTP %d", method, path, code)}
+}
+
+// httpError is an answer that is not a success, keeping its status for the caller.
+type httpError struct {
+	code int
+	err  error
+}
+
+func (e *httpError) Error() string { return e.err.Error() }
+func (e *httpError) Unwrap() error { return e.err }
+
+// statusOf is the HTTP status behind err, or 0 when GitHub gave no answer.
+func statusOf(err error) int {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.code
+	}
+	return 0
 }
 
 // keep stores a GET answer for conditional requests, pruning entries unused for an hour once the
@@ -397,11 +415,34 @@ type Job struct {
 	ID        int64
 	Repo      string
 	CreatedAt time.Time
+	Unlisted  bool // found only through the unfiltered runs list: GitHub's status filter left its run out
+}
+
+// UnlistedReadFailure is one repository whose fallback read failed, with the HTTP status (0: no answer).
+type UnlistedReadFailure struct {
+	Repo   string
+	Status int
+}
+
+// UnlistedReadError is QueuedJobs' answer when every read but the fallback for runs the status
+// filter left out worked. The fallback only adds jobs, so the jobs returned with it are what the
+// scope served before the fallback existed: the caller serves them and logs the failures.
+type UnlistedReadError struct {
+	Failed []UnlistedReadFailure
+}
+
+func (e *UnlistedReadError) Error() string {
+	parts := make([]string, len(e.Failed))
+	for i, f := range e.Failed {
+		parts[i] = fmt.Sprintf("%s (HTTP %d)", f.Repo, f.Status)
+	}
+	return "ghapp: the unfiltered run list could not be read for " + strings.Join(parts, ", ")
 }
 
 // QueuedJobs are the queued jobs with our label in the scope's repositories: every repository
 // the installation holds under the org, or the one repository of a repo scope. A repo scope that
 // answers 404 is ErrNotFound; in an org scope a repository that vanished after the listing is skipped.
+// When only fallback reads failed, the jobs come with an *UnlistedReadError naming them.
 func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, error) {
 	tok, err := c.installToken(ctx, s)
 	if err != nil {
@@ -413,8 +454,14 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 			return nil, err
 		}
 	}
+	return c.reposJobs(ctx, s, repos, tok)
+}
+
+// reposJobs are the queued jobs of the scope's repositories, as QueuedJobs answers them.
+func (c *Client) reposJobs(ctx context.Context, s reconcile.Scope, repos []string, tok string) ([]Job, error) {
 	seen := map[int64]bool{}
 	var out []Job
+	var failed []UnlistedReadFailure
 	for _, repo := range repos {
 		jobs, err := c.repoJobs(ctx, repo, tok, seen)
 		if errors.Is(err, ErrNotFound) && s.Kind == "org" {
@@ -423,7 +470,14 @@ func (c *Client) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]Job, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, jobs...)
+		unlisted, err := c.unlistedJobs(ctx, repo, tok, jobs.listed, seen)
+		if err != nil {
+			failed = append(failed, UnlistedReadFailure{Repo: repo, Status: statusOf(err)})
+		}
+		out = append(append(out, jobs.jobs...), unlisted...)
+	}
+	if failed != nil {
+		return out, &UnlistedReadError{Failed: failed}
 	}
 	return out, nil
 }
@@ -449,10 +503,19 @@ func (c *Client) orgRepos(ctx context.Context, s reconcile.Scope, tok string) ([
 	return repos, err
 }
 
-// repoJobs are the queued jobs with our label in one repository, skipping the ids in seen and
-// adding its own. A run that vanished after the runs listing is skipped.
-func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]bool) ([]Job, error) {
+// listedJobs are what the status-filtered lists of one repository found: the queued jobs and every
+// run they listed.
+type listedJobs struct {
+	jobs   []Job
+	listed map[int64]bool
+}
+
+// repoJobs are the queued jobs with our label that the status-filtered lists of one repository
+// find, skipping the ids in seen and adding its own. A run that vanished after the runs listing is
+// skipped.
+func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]bool) (listedJobs, error) {
 	var out []Job
+	listed := map[int64]bool{}
 	// A run waiting to start reports "pending" (behind a concurrency group, say) while its
 	// jobs are already queued, so pending runs are read too.
 	for _, status := range []string{"queued", "pending", "in_progress"} {
@@ -466,18 +529,58 @@ func (c *Client) repoJobs(ctx context.Context, repo, tok string, seen map[int64]
 			func() any { runs.Runs = nil; return &runs }, func() {
 				for _, r := range runs.Runs {
 					runIDs = append(runIDs, r.ID)
+					listed[r.ID] = true
 				}
 			})
 		if err != nil {
+			return listedJobs{}, err
+		}
+		jobs, err := c.jobsOfRuns(ctx, repo, runIDs, tok, seen)
+		if err != nil {
+			return listedJobs{}, err
+		}
+		out = append(out, jobs...)
+	}
+	return listedJobs{jobs: out, listed: listed}, nil
+}
+
+// unlistedJobs are the queued jobs of runs that GitHub's status filter left out of every listing
+// (it did on 2026-11-21, for 25 minutes): it reads the first page of the unfiltered runs list, the
+// newest runs, once with no paging, and the jobs of each run that is not completed and was not
+// listed. A run pushed off that page by newer runs is never found here. It only adds jobs, so its
+// error never costs the jobs the filtered lists found.
+func (c *Client) unlistedJobs(ctx context.Context, repo, tok string, listed, seen map[int64]bool) ([]Job, error) {
+	var runs struct {
+		Runs []struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		} `json:"workflow_runs"`
+	}
+	if _, _, err := c.call(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/actions/runs?per_page=20", c.cfg.BaseURL, repo), tok, nil, &runs); err != nil {
+		return nil, err
+	}
+	var runIDs []int64
+	for _, r := range runs.Runs {
+		if r.Status != "completed" && !listed[r.ID] {
+			runIDs = append(runIDs, r.ID)
+		}
+	}
+	jobs, err := c.jobsOfRuns(ctx, repo, runIDs, tok, seen)
+	for i := range jobs {
+		jobs[i].Unlisted = true
+	}
+	return jobs, err
+}
+
+// jobsOfRuns are the queued jobs with our label in the runs, skipping a run that vanished.
+func (c *Client) jobsOfRuns(ctx context.Context, repo string, runIDs []int64, tok string, seen map[int64]bool) ([]Job, error) {
+	var out []Job
+	for _, id := range runIDs {
+		jobs, err := c.runJobs(ctx, repo, id, tok, seen)
+		if err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
-		for _, id := range runIDs {
-			jobs, err := c.runJobs(ctx, repo, id, tok, seen)
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			out = append(out, jobs...)
-		}
+		out = append(out, jobs...)
 	}
 	return out, nil
 }
