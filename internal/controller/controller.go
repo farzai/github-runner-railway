@@ -355,7 +355,6 @@ func poolJobs(p reconcile.Pool, rd scopeReads) ([]reconcile.Scope, map[string][]
 // scopeReads is what reading every scope in a cycle found.
 type scopeReads struct {
 	readable []reconcile.Scope
-	queued   map[string]int
 	runners  map[string][]reconcile.Runner
 	jobs     map[string][]ghapp.Job
 	errs     []error // the errors that fail the cycle
@@ -393,7 +392,7 @@ func (c *Controller) warnUnlistedRead(e *ghapp.UnlistedReadError) int {
 
 // readScopes reads every scope, records how each went, and raises or clears the missing-scope alerts.
 func (c *Controller) readScopes(ctx context.Context) scopeReads {
-	rd := scopeReads{queued: map[string]int{}, runners: map[string][]reconcile.Runner{}, jobs: map[string][]ghapp.Job{}}
+	rd := scopeReads{runners: map[string][]reconcile.Runner{}, jobs: map[string][]ghapp.Job{}}
 	for _, s := range c.scopes {
 		jobs, rs, err := c.readScope(ctx, s)
 		var ue *ghapp.UnlistedReadError
@@ -408,7 +407,7 @@ func (c *Controller) readScopes(ctx context.Context) scopeReads {
 			continue
 		}
 		rd.readable = append(rd.readable, s)
-		rd.queued[s.Key()], rd.runners[s.Key()], rd.jobs[s.Key()] = len(jobs), rs, jobs
+		rd.runners[s.Key()], rd.jobs[s.Key()] = rs, jobs
 	}
 	if fail := c.noneReadable(); fail != nil {
 		rd.errs = append(rd.errs, fail)
