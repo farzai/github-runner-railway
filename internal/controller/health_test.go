@@ -18,8 +18,9 @@ import (
 func alerting(gh *fakeGH, rw *fakeRW) (*Controller, *[]string) {
 	var alerts []string
 	c := New(Config{
-		Scopes: []reconcile.Scope{org, repo}, Prefix: "rr-", MaxRunners: 10, MaxCreatePerCycle: 5,
-		StartupGrace: 3 * time.Minute, IdleTTL: 2 * time.Minute, MaxAge: 6 * time.Hour, AlertAfter: 5 * time.Minute,
+		Pools:             []reconcile.Pool{{Label: "railway", Image: "img", Prefix: "rr-", MaxRunners: 10, Scopes: []reconcile.Scope{org, repo}}},
+		MaxCreatePerCycle: 5,
+		StartupGrace:      3 * time.Minute, IdleTTL: 2 * time.Minute, MaxAge: 6 * time.Hour, AlertAfter: 5 * time.Minute,
 		Interval: time.Minute, FailAlertAfter: 3, Alert: func(m string) { alerts = append(alerts, m) },
 	}, gh, rw)
 	c.now = func() time.Time { return now }

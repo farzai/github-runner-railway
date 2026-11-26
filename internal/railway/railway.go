@@ -22,15 +22,13 @@ import (
 // Backboard sits behind Cloudflare, which refuses a bot user agent with error 1010.
 const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
-// Config is the project and the image the runner services use.
+// Config is the project the runner services live in and the name prefixes of the pools.
 type Config struct {
 	URL           string // default https://backboard.railway.com/graphql/v2
 	Token         string
 	ProjectID     string
 	EnvironmentID string
-	Image         string
-	Prefix        string // service names start with it, e.g. "rr-"
-	Region        string // Railway region of each runner, e.g. "us-east4-eqdc4a"; empty leaves it to Railway
+	Prefixes      []string // one per pool; service names start with one, e.g. "rr-"
 	HTTP          *http.Client
 }
 
@@ -106,7 +104,8 @@ const listQuery = `query($p:String!){project(id:$p){services{edges{node{id name 
 // part, six lowercase hex digits each (controller.create).
 var runnerName = regexp.MustCompile(`^[0-9a-f]{6}-[0-9a-f]{6}$`)
 
-// List is our runner services (by name prefix) with whether their container has ended.
+// List is every pool's runner services (by name prefix), from one listing, with whether their
+// container has ended.
 func (c *Client) List(ctx context.Context) ([]reconcile.Service, error) {
 	var d struct {
 		Project struct {
@@ -139,8 +138,8 @@ func (c *Client) List(ctx context.Context) ([]reconcile.Service, error) {
 		n := e.Node
 		// only the exact names the controller makes: a shared service that merely starts with the
 		// prefix (rr-postgres) must never be listed, counted or deleted
-		rest, ok := strings.CutPrefix(n.Name, c.cfg.Prefix)
-		if !ok || !runnerName.MatchString(rest) {
+		rest, ok := c.runnerRest(n.Name)
+		if !ok {
 			continue
 		}
 		s := reconcile.Service{ID: n.ID, Name: n.Name, CreatedAt: n.CreatedAt, ScopeHash: rest[:6]}
@@ -157,16 +156,27 @@ func (c *Client) List(ctx context.Context) ([]reconcile.Service, error) {
 	return out, nil
 }
 
-// Create makes a runner service from the image with vars, never restarted, and deploys it
-// once. A service that cannot be configured is deleted, not left half-made.
-func (c *Client) Create(ctx context.Context, name string, vars map[string]string) (string, error) {
+// runnerRest is what follows a pool's prefix in name, when name is exactly a runner service name
+// of one of the pools.
+func (c *Client) runnerRest(name string) (string, bool) {
+	for _, p := range c.cfg.Prefixes {
+		if rest, ok := strings.CutPrefix(name, p); ok && runnerName.MatchString(rest) {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// Create makes a runner service of the pool (its image, in its region) with vars, never restarted,
+// and deploys it once. A service that cannot be configured is deleted, not left half-made.
+func (c *Client) Create(ctx context.Context, pool reconcile.Pool, name string, vars map[string]string) (string, error) {
 	var created struct {
 		ServiceCreate struct {
 			ID string `json:"id"`
 		} `json:"serviceCreate"`
 	}
 	in := map[string]any{"projectId": c.cfg.ProjectID, "environmentId": c.cfg.EnvironmentID, "name": name,
-		"source": map[string]any{"image": c.cfg.Image}, "variables": vars}
+		"source": map[string]any{"image": pool.Image}, "variables": vars}
 	if err := c.do(ctx, `mutation($i:ServiceCreateInput!){serviceCreate(input:$i){id name}}`, map[string]any{"i": in}, &created); err != nil {
 		return "", err
 	}
@@ -178,9 +188,9 @@ func (c *Client) Create(ctx context.Context, name string, vars map[string]string
 	// One replica. With a region, it is placed there through multiRegionConfig, the shape Railway
 	// records on the deployment; without one, Railway uses the workspace's preferred region.
 	instance := map[string]any{"restartPolicyType": "NEVER", "numReplicas": 1}
-	if c.cfg.Region != "" {
+	if pool.Region != "" {
 		delete(instance, "numReplicas")
-		instance["multiRegionConfig"] = map[string]any{c.cfg.Region: map[string]any{"numReplicas": 1}}
+		instance["multiRegionConfig"] = map[string]any{pool.Region: map[string]any{"numReplicas": 1}}
 	}
 	if err := c.do(ctx, `mutation($s:String!,$e:String!,$i:ServiceInstanceUpdateInput!){serviceInstanceUpdate(serviceId:$s,environmentId:$e,input:$i)}`,
 		map[string]any{"s": id, "e": c.cfg.EnvironmentID, "i": instance}, nil); err != nil {

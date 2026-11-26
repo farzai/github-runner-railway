@@ -49,7 +49,7 @@ func (g *countingGH) QueuedJobs(ctx context.Context, s reconcile.Scope) ([]ghapp
 func TestABurstOfNudgesInsideTheDebounceIsOneCycle(t *testing.T) {
 	// a job is queued, so the nudged cycle finds work and no retry follows
 	gh := &countingGH{fakeGH: fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {{ID: 1, Repo: "acme/app", CreatedAt: now}}}}}
-	c := New(Config{Scopes: []reconcile.Scope{repo}, Prefix: "rr-", MaxRunners: 1, MaxCreatePerCycle: 1,
+	c := New(Config{Pools: []reconcile.Pool{{Label: "railway", Image: "img", Prefix: "rr-", MaxRunners: 1, Scopes: []reconcile.Scope{repo}}}, MaxCreatePerCycle: 1,
 		StartupGrace: time.Minute, IdleTTL: time.Minute, MaxAge: time.Hour,
 		Interval: time.Hour, MinGap: time.Millisecond, Debounce: 150 * time.Millisecond}, gh, &fakeRW{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -77,7 +77,7 @@ type laggingGH struct {
 
 func (g *laggingGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, error) {
 	if g.reads.Add(1) >= g.listFrom {
-		return []ghapp.Job{{ID: 1, Repo: "acme/app", CreatedAt: now}}, nil
+		return []ghapp.Job{{ID: 1, Repo: "acme/app", Label: "railway", CreatedAt: now}}, nil
 	}
 	return nil, nil
 }
@@ -87,7 +87,7 @@ func (g *laggingGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Jo
 func TestAWebhookCycleThatFindsNothingChecksOnceMoreAfterTheGap(t *testing.T) {
 	gh := &laggingGH{listFrom: 3} // read 1: start-up cycle, read 2: the webhook cycle, read 3: the retry
 	rw := &fakeRW{}
-	c := New(Config{Scopes: []reconcile.Scope{repo}, Prefix: "rr-", MaxRunners: 1, MaxCreatePerCycle: 1,
+	c := New(Config{Pools: []reconcile.Pool{{Label: "railway", Image: "img", Prefix: "rr-", MaxRunners: 1, Scopes: []reconcile.Scope{repo}}}, MaxCreatePerCycle: 1,
 		StartupGrace: time.Minute, IdleTTL: time.Minute, MaxAge: time.Hour,
 		Interval: time.Hour, MinGap: 200 * time.Millisecond, Debounce: 20 * time.Millisecond}, gh, rw)
 	ctx, cancel := context.WithCancel(context.Background())

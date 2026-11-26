@@ -26,23 +26,21 @@ import (
 type GH interface {
 	QueuedJobs(ctx context.Context, s reconcile.Scope) ([]ghapp.Job, error)
 	Runners(ctx context.Context, s reconcile.Scope) ([]reconcile.Runner, error)
-	JITConfig(ctx context.Context, s reconcile.Scope, name string) (string, int64, error)
+	JITConfig(ctx context.Context, s reconcile.Scope, name, label string) (string, int64, error)
 	DeleteRunner(ctx context.Context, s reconcile.Scope, id int64) error
 }
 
 // RW is the Railway side.
 type RW interface {
 	List(ctx context.Context) ([]reconcile.Service, error)
-	Create(ctx context.Context, name string, vars map[string]string) (string, error)
+	Create(ctx context.Context, pool reconcile.Pool, name string, vars map[string]string) (string, error)
 	Delete(ctx context.Context, id string) error
 }
 
 // Config is the controller's knobs.
 type Config struct {
-	Scopes            []reconcile.Scope
-	Prefix            string
-	MaxRunners        int
-	MaxCreatePerCycle int
+	Pools             []reconcile.Pool // each planned on its own; a scope in two pools is read once
+	MaxCreatePerCycle int              // per pool
 	StartupGrace      time.Duration
 	IdleTTL           time.Duration
 	MaxAge            time.Duration
@@ -58,6 +56,7 @@ type Config struct {
 // Controller applies plans.
 type Controller struct {
 	cfg     Config
+	scopes  []reconcile.Scope // every pool's scopes, each once
 	gh      GH
 	rw      RW
 	now     func() time.Time
@@ -115,8 +114,23 @@ func New(cfg Config, gh GH, rw RW) *Controller {
 	if cfg.FailAlertAfter <= 0 {
 		cfg.FailAlertAfter = 3
 	}
-	return &Controller{cfg: cfg, gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{},
+	return &Controller{cfg: cfg, scopes: distinctScopes(cfg.Pools), gh: gh, rw: rw, now: time.Now, wake: make(chan struct{}, 1), alerted: map[int64]string{},
 		scopeFails: map[string]int{}, missing: map[string]int{}, goneAlerted: map[string]bool{}, lowWarn: map[string]time.Time{}}
+}
+
+// distinctScopes is every pool's scopes, each once, in the order they first appear.
+func distinctScopes(pools []reconcile.Pool) []reconcile.Scope {
+	var out []reconcile.Scope
+	seen := map[string]bool{}
+	for _, p := range pools {
+		for _, s := range p.Scopes {
+			if !seen[s.Key()] {
+				seen[s.Key()] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // OnEvent is the webhook handler. Only a queued job can need a new runner; the rest wait for
@@ -223,65 +237,124 @@ func (c *Controller) Cycle(ctx context.Context) (err error) {
 	}()
 	rd := c.readScopes(ctx)
 	gap = unlistedGap{jobs: c.warnUnlisted(rd.jobs), readFailed: rd.unlistedReadFailed}
-	errs, queued, runners, jobsOf, readable := rd.errs, rd.queued, rd.runners, rd.jobs, rd.readable
+	errs := rd.errs
 	all, err := c.rw.List(ctx)
 	if err != nil {
 		errs = append(errs, err)
 		c.record(now, errs, 0, 0, gap)
 		return errors.Join(errs...)
 	}
+	services := c.lookable(all, rd.readable)
+	var sum poolOutcome
+	for _, p := range c.cfg.Pools {
+		o := c.cyclePool(ctx, now, p, rd, services)
+		errs = append(errs, o.errs...)
+		sum.created, sum.reaped, sum.services, sum.queued = sum.created+o.created, sum.reaped+o.reaped, sum.services+o.services, sum.queued+o.queued
+	}
+	created, reaped = sum.created, sum.reaped
+	c.forgetAlerted(rd.jobs)
+	c.warnLowLimits()
+	c.record(now, errs, sum.services, sum.queued, gap)
+	return errors.Join(errs...)
+}
+
+// lookable drops the services of a configured scope that could not be read this cycle: a guess about
+// them could kill a busy runner. A service of a scope no pool has any more stays, to be reaped in time.
+func (c *Controller) lookable(all []reconcile.Service, readable []reconcile.Scope) []reconcile.Service {
 	ok := map[string]bool{}
 	for _, s := range readable {
 		ok[s.Hash()] = true
 	}
-	var services []reconcile.Service
+	known := map[string]bool{}
+	for _, s := range c.scopes {
+		known[s.Hash()] = true
+	}
+	var out []reconcile.Service
 	for _, sv := range all {
-		known := false
-		for _, s := range c.cfg.Scopes {
-			known = known || s.Hash() == sv.ScopeHash
-		}
-		if !known || ok[sv.ScopeHash] { // a service of an unreadable scope is not looked at
-			services = append(services, sv)
+		if !known[sv.ScopeHash] || ok[sv.ScopeHash] {
+			out = append(out, sv)
 		}
 	}
+	return out
+}
+
+// poolOutcome is what one pool's part of a cycle did.
+type poolOutcome struct {
+	created, reaped int
+	services        int // the pool's services once its plan is applied
+	queued          int // the pool's queued jobs in its readable scopes
+	errs            []error
+}
+
+// cyclePool plans and applies one pool: only its own services (by prefix), only the jobs that ask
+// for its label, in the scopes of its that could be read. Another pool's services are never its
+// supply, never count toward its maximum and are never reaped by it.
+func (c *Controller) cyclePool(ctx context.Context, now time.Time, p reconcile.Pool, rd scopeReads, services []reconcile.Service) poolOutcome {
+	var o poolOutcome
+	var mine []reconcile.Service
+	for _, sv := range services {
+		if strings.HasPrefix(sv.Name, p.Prefix) {
+			mine = append(mine, sv)
+		}
+	}
+	readable, jobs, queued := poolJobs(p, rd)
+	for _, n := range queued {
+		o.queued += n
+	}
 	plan := reconcile.Make(reconcile.Input{
-		Now: now, Queued: queued, Services: services, Runners: runners,
-		Params: reconcile.Params{MaxRunners: c.cfg.MaxRunners, MaxCreatePerCycle: c.cfg.MaxCreatePerCycle, StartupGrace: c.cfg.StartupGrace,
+		Now: now, Queued: queued, Services: mine, Runners: rd.runners,
+		Params: reconcile.Params{MaxRunners: p.MaxRunners, MaxCreatePerCycle: c.cfg.MaxCreatePerCycle, StartupGrace: c.cfg.StartupGrace,
 			IdleTTL: c.cfg.IdleTTL, MaxAge: c.cfg.MaxAge, Scopes: readable},
 	})
 	for _, r := range plan.Reap {
 		deleted, err := c.reap(ctx, r)
 		if err != nil {
-			errs = append(errs, err)
+			o.errs = append(o.errs, err)
 			continue
 		}
 		if deleted {
-			reaped++
+			o.reaped++
 		}
 	}
 	createdBy := map[string]int{}
 	for _, cr := range plan.Create {
-		if err := c.create(ctx, scopeByKey(readable, cr.Scope)); err != nil {
-			errs = append(errs, err)
+		if err := c.create(ctx, p, scopeByKey(readable, cr.Scope)); err != nil {
+			o.errs = append(o.errs, err)
 			continue
 		}
 		createdBy[cr.Scope]++
-		created++
+		o.created++
 	}
-	c.alertLate(now, jobsOf, services, runners, createdBy)
-	c.warnLowLimits()
-	total := 0
-	for _, n := range queued {
-		total += n
+	c.alertLate(now, p, jobs, mine, rd.runners, createdBy)
+	o.services = len(mine) + len(plan.Create) - len(plan.Reap)
+	return o
+}
+
+// poolJobs are the pool's scopes that could be read this cycle, and in each the jobs that ask for
+// the pool's label and how many there are.
+func poolJobs(p reconcile.Pool, rd scopeReads) ([]reconcile.Scope, map[string][]ghapp.Job, map[string]int) {
+	var readable []reconcile.Scope
+	jobs, queued := map[string][]ghapp.Job{}, map[string]int{}
+	for _, s := range p.Scopes {
+		all, ok := rd.jobs[s.Key()]
+		if !ok {
+			continue
+		}
+		readable = append(readable, s)
+		var js []ghapp.Job
+		for _, j := range all {
+			if j.Label == p.Label {
+				js = append(js, j)
+			}
+		}
+		jobs[s.Key()], queued[s.Key()] = js, len(js)
 	}
-	c.record(now, errs, len(services)+len(plan.Create)-len(plan.Reap), total, gap)
-	return errors.Join(errs...)
+	return readable, jobs, queued
 }
 
 // scopeReads is what reading every scope in a cycle found.
 type scopeReads struct {
 	readable []reconcile.Scope
-	queued   map[string]int
 	runners  map[string][]reconcile.Runner
 	jobs     map[string][]ghapp.Job
 	errs     []error // the errors that fail the cycle
@@ -319,8 +392,8 @@ func (c *Controller) warnUnlistedRead(e *ghapp.UnlistedReadError) int {
 
 // readScopes reads every scope, records how each went, and raises or clears the missing-scope alerts.
 func (c *Controller) readScopes(ctx context.Context) scopeReads {
-	rd := scopeReads{queued: map[string]int{}, runners: map[string][]reconcile.Runner{}, jobs: map[string][]ghapp.Job{}}
-	for _, s := range c.cfg.Scopes {
+	rd := scopeReads{runners: map[string][]reconcile.Runner{}, jobs: map[string][]ghapp.Job{}}
+	for _, s := range c.scopes {
 		jobs, rs, err := c.readScope(ctx, s)
 		var ue *ghapp.UnlistedReadError
 		if errors.As(err, &ue) {
@@ -334,7 +407,7 @@ func (c *Controller) readScopes(ctx context.Context) scopeReads {
 			continue
 		}
 		rd.readable = append(rd.readable, s)
-		rd.queued[s.Key()], rd.runners[s.Key()], rd.jobs[s.Key()] = len(jobs), rs, jobs
+		rd.runners[s.Key()], rd.jobs[s.Key()] = rs, jobs
 	}
 	if fail := c.noneReadable(); fail != nil {
 		rd.errs = append(rd.errs, fail)
@@ -350,7 +423,7 @@ func (c *Controller) readScopes(ctx context.Context) scopeReads {
 // another reason, those errors already fail the cycle and the 404 scopes are not blamed for it.
 func (c *Controller) noneReadable() error {
 	var gone []string
-	for _, s := range c.cfg.Scopes {
+	for _, s := range c.scopes {
 		if c.missing[s.Key()] == 0 {
 			return nil
 		}
@@ -371,7 +444,7 @@ func (c *Controller) alertMissing(readable []reconcile.Scope) {
 			c.pending = append(c.pending, "controller: scope "+s.Key()+" is readable again")
 		}
 	}
-	for _, s := range c.cfg.Scopes {
+	for _, s := range c.scopes {
 		if n := c.missing[s.Key()]; n >= c.cfg.FailAlertAfter && !c.goneAlerted[s.Key()] {
 			c.goneAlerted[s.Key()] = true
 			c.pending = append(c.pending, fmt.Sprintf("controller: scope %s not found on GitHub for %d cycles in a row; "+
@@ -454,7 +527,7 @@ func (c *Controller) record(now time.Time, errs []error, services, queued int, g
 // unreadableScopes counts the scopes the last cycle could not read (a 404 included), and names the
 // ones that failed for FailAlertAfter cycles or more for another reason, for the operator's alert.
 func (c *Controller) unreadableScopes() (unreadable int, stuck []string) {
-	for _, s := range c.cfg.Scopes {
+	for _, s := range c.scopes {
 		n := c.scopeFails[s.Key()]
 		if n > 0 || c.missing[s.Key()] > 0 {
 			unreadable++
@@ -477,7 +550,7 @@ func truncate(s string, n int) string {
 // and the service was kept.
 func (c *Controller) reap(ctx context.Context, r reconcile.Reap) (deleted bool, err error) {
 	if r.RunnerID != 0 {
-		sc := scopeByKey(c.cfg.Scopes, r.Scope)
+		sc := scopeByKey(c.scopes, r.Scope)
 		if err := c.gh.DeleteRunner(ctx, sc, r.RunnerID); err != nil {
 			if errors.Is(err, ghapp.ErrBusy) && !r.Force {
 				c.cfg.Log.Info("runner turned busy; kept", "service", r.Service.Name)
@@ -495,30 +568,30 @@ func (c *Controller) reap(ctx context.Context, r reconcile.Reap) (deleted bool, 
 	return true, nil
 }
 
-func (c *Controller) create(ctx context.Context, s reconcile.Scope) error {
+func (c *Controller) create(ctx context.Context, p reconcile.Pool, s reconcile.Scope) error {
 	var b [3]byte
 	_, _ = rand.Read(b[:])
-	name := c.cfg.Prefix + s.Hash() + "-" + hex.EncodeToString(b[:])
-	jit, runnerID, err := c.gh.JITConfig(ctx, s, name)
+	name := p.Prefix + s.Hash() + "-" + hex.EncodeToString(b[:])
+	jit, runnerID, err := c.gh.JITConfig(ctx, s, name, p.Label)
 	if err != nil {
 		return fmt.Errorf("jit config %s: %w", s.Key(), err)
 	}
-	if _, err := c.rw.Create(ctx, name, map[string]string{"ACTIONS_RUNNER_INPUT_JITCONFIG": jit}); err != nil {
+	if _, err := c.rw.Create(ctx, p, name, map[string]string{"ACTIONS_RUNNER_INPUT_JITCONFIG": jit}); err != nil {
 		if derr := c.gh.DeleteRunner(ctx, s, runnerID); derr != nil {
 			c.cfg.Log.Error("could not remove the runner of a failed service", "runner", name)
 		}
 		return fmt.Errorf("create service %s: %w", name, err)
 	}
-	c.cfg.Log.Info("created", "service", name, "scope", s.Key())
+	c.cfg.Log.Info("created", "service", name, "scope", s.Key(), "pool", p.Label)
 	return nil
 }
 
-// alertLate raises one alert per job that has waited past AlertAfter with no runner coming
-// for its scope (a service created this cycle or still starting counts as coming).
-func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, services []reconcile.Service, runners map[string][]reconcile.Runner, created map[string]int) {
-	live := map[int64]bool{}
+// alertLate raises one alert per job of the pool that has waited past AlertAfter with no runner
+// of the pool coming for its scope (a service of the pool created this cycle or still starting
+// counts as coming).
+func (c *Controller) alertLate(now time.Time, p reconcile.Pool, jobs map[string][]ghapp.Job, services []reconcile.Service, runners map[string][]reconcile.Runner, created map[string]int) {
 	for key, js := range jobs {
-		sc := scopeByKey(c.cfg.Scopes, key)
+		sc := scopeByKey(c.scopes, key)
 		coming := created[key]
 		for _, sv := range services {
 			if sv.ScopeHash != sc.Hash() || sv.Exited {
@@ -533,12 +606,22 @@ func (c *Controller) alertLate(now time.Time, jobs map[string][]ghapp.Job, servi
 			}
 		}
 		for _, j := range js {
-			live[j.ID] = true
 			if _, done := c.alerted[j.ID]; coming > 0 || done || j.CreatedAt.IsZero() || now.Sub(j.CreatedAt) < c.cfg.AlertAfter {
 				continue
 			}
 			c.alerted[j.ID] = key
-			c.pending = append(c.pending, fmt.Sprintf("job %d in %s has been queued %s with no runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second)))
+			c.pending = append(c.pending, fmt.Sprintf("job %d in %s has been queued %s with no %s runner coming", j.ID, j.Repo, now.Sub(j.CreatedAt).Round(time.Second), p.Label))
+		}
+	}
+}
+
+// forgetAlerted drops the mark of every alerted job no longer queued in a scope read this cycle,
+// once over every pool's jobs, so one pool never clears a mark of another's in a shared scope.
+func (c *Controller) forgetAlerted(jobs map[string][]ghapp.Job) {
+	live := map[int64]bool{}
+	for _, js := range jobs {
+		for _, j := range js {
+			live[j.ID] = true
 		}
 	}
 	for id, key := range c.alerted {

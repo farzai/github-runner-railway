@@ -58,7 +58,7 @@ func newGH(t *testing.T, f *fake) *Client {
 		}
 	}))
 	t.Cleanup(ts.Close)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway", RunnerGroupID: 7})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Labels: []string{"railway", "railway-pg"}, RunnerGroupID: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ var repo = reconcile.Scope{Kind: "repo", Owner: "acme", Repo: "app"}
 
 func TestAppJWTIsSignedWithTheKeyAndShortLived(t *testing.T) {
 	pemKey, key := testKey(t)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: "http://x", Label: "l"})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: "http://x", Labels: []string{"l"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,20 +99,20 @@ func TestAppJWTIsSignedWithTheKeyAndShortLived(t *testing.T) {
 }
 
 func TestANewClientRefusesAMissingOrBrokenKey(t *testing.T) {
-	if _, err := New(Config{AppID: "1", PrivateKey: "", Label: "l"}); err == nil {
+	if _, err := New(Config{AppID: "1", PrivateKey: "", Labels: []string{"l"}}); err == nil {
 		t.Error("empty key")
 	}
-	if _, err := New(Config{AppID: "", PrivateKey: "x", Label: "l"}); err == nil {
+	if _, err := New(Config{AppID: "", PrivateKey: "x", Labels: []string{"l"}}); err == nil {
 		t.Error("no app id")
 	}
-	if _, err := New(Config{AppID: "1", PrivateKey: "not a pem", Label: "l"}); err == nil {
+	if _, err := New(Config{AppID: "1", PrivateKey: "not a pem", Labels: []string{"l"}}); err == nil {
 		t.Error("garbage key")
 	}
 }
 
 func TestAPEMWithEscapedNewlinesIsAccepted(t *testing.T) {
 	pemKey, _ := testKey(t)
-	if _, err := New(Config{AppID: "1", PrivateKey: strings.ReplaceAll(pemKey, "\n", `\n`), Label: "l"}); err != nil {
+	if _, err := New(Config{AppID: "1", PrivateKey: strings.ReplaceAll(pemKey, "\n", `\n`), Labels: []string{"l"}}); err != nil {
 		t.Errorf("a key pasted into a Railway variable keeps its newlines escaped: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken(t *testin
 		io.WriteString(w, `{"runner":{"id":9},"encoded_jit_config":"ENC"}`)
 	}}
 	c := newGH(t, f)
-	enc, id, err := c.JITConfig(context.Background(), org, "rr-abc-1")
+	enc, id, err := c.JITConfig(context.Background(), org, "rr-abc-1", "railway")
 	if err != nil || enc != "ENC" || id != 9 {
 		t.Fatalf("enc %q id %d err %v", enc, id, err)
 	}
@@ -144,7 +144,7 @@ func TestJITConfigForAnOrgUsesTheGroupAndLabelsAndTheInstallationToken(t *testin
 func TestJITConfigForARepoUsesTheRepoEndpointAndTheDefaultGroup(t *testing.T) {
 	f := &fake{h: func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"encoded_jit_config":"E2"}`) }}
 	c := newGH(t, f)
-	if _, _, err := c.JITConfig(context.Background(), repo, "rr-x"); err != nil {
+	if _, _, err := c.JITConfig(context.Background(), repo, "rr-x", "railway-pg"); err != nil {
 		t.Fatal(err)
 	}
 	last := len(f.reqs) - 1
@@ -394,10 +394,70 @@ func TestRedirectsAreNeverFollowedSoNoCredentialTravelsWithOne(t *testing.T) {
 func TestACallerSuppliedClientIsNotChanged(t *testing.T) {
 	pemKey, _ := testKey(t)
 	shared := &http.Client{}
-	if _, err := New(Config{AppID: "1", PrivateKey: pemKey, Label: "l", HTTP: shared}); err != nil {
+	if _, err := New(Config{AppID: "1", PrivateKey: pemKey, Labels: []string{"l"}, HTTP: shared}); err != nil {
 		t.Fatal(err)
 	}
 	if shared.CheckRedirect != nil {
 		t.Error("New changed the client it was given (it could be http.DefaultClient)")
+	}
+}
+
+func TestJITConfigRegistersTheLabelOfThePoolItServes(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"encoded_jit_config":"E3"}`) }}
+	c := newGH(t, f)
+	if _, _, err := c.JITConfig(context.Background(), repo, "rp-x", "railway-pg"); err != nil {
+		t.Fatal(err)
+	}
+	if last := f.bodies[len(f.bodies)-1]; !strings.Contains(last, `"labels":["self-hosted","linux","x64","railway-pg"]`) {
+		t.Errorf("body %s: the runner carries its pool's label", last)
+	}
+}
+
+func TestNewNeedsAtLeastOneLabel(t *testing.T) {
+	pemKey, _ := testKey(t)
+	if _, err := New(Config{AppID: "1", PrivateKey: pemKey}); err == nil {
+		t.Error("a client with no label accepted: it could take no job")
+	}
+}
+
+// Each job goes to the one pool whose label it asks for, in that pool's own spelling; a job that
+// asks for two pool labels fits no runner (each runner has one), so no pool takes it.
+func TestQueuedJobsCarryThePoolLabelEachJobAsksFor(t *testing.T) {
+	f := &fake{h: func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/actions/runs") && r.URL.Query().Get("status") == "queued":
+			io.WriteString(w, `{"workflow_runs":[{"id":11}]}`)
+		case strings.HasSuffix(r.URL.Path, "/actions/runs"):
+			io.WriteString(w, `{"workflow_runs":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/runs/11/jobs"):
+			io.WriteString(w, `{"jobs":[`+
+				`{"id":1,"status":"queued","labels":["self-hosted","Railway"]},`+
+				`{"id":2,"status":"queued","labels":["self-hosted","linux","x64","railway-pg"]},`+
+				`{"id":3,"status":"queued","labels":["railway","railway-pg"]},`+
+				`{"id":4,"status":"queued","labels":["railway","railway"]},`+
+				`{"id":5,"status":"queued","labels":["self-hosted","linux"]},`+
+				`{"id":6,"status":"queued","labels":["railway","gpu"]}]}`)
+		default:
+			t.Errorf("unexpected %s", r.URL.RequestURI())
+			w.WriteHeader(404)
+		}
+	}}
+	c := newGH(t, f)
+	jobs, err := c.QueuedJobs(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]string{}
+	for _, j := range jobs {
+		got[j.ID] = j.Label
+	}
+	want := map[int64]string{1: "railway", 2: "railway-pg", 4: "railway"}
+	if len(got) != len(want) {
+		t.Fatalf("jobs %v, want %v", got, want)
+	}
+	for id, l := range want {
+		if got[id] != l {
+			t.Errorf("job %d label %q, want %q", id, got[id], l)
+		}
 	}
 }

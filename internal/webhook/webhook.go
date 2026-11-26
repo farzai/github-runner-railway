@@ -40,9 +40,10 @@ type payload struct {
 }
 
 // Handler verifies the signature (HMAC SHA-256 with the shared secret) and calls handle for
-// a workflow_job event that carries the label. Every other verified event is acknowledged
-// and dropped. With no secret nothing can be verified, so everything is refused.
-func Handler(secret, label string, handle func(Event)) http.Handler {
+// a workflow_job event that carries one of the pool labels (compared without case, as GitHub
+// compares runner labels). Every other verified event is acknowledged and dropped. With no
+// secret nothing can be verified, so everything is refused.
+func Handler(secret string, labels []string, handle func(Event)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -66,19 +67,24 @@ func Handler(secret, label string, handle func(Event)) http.Handler {
 			http.Error(w, "bad payload", http.StatusBadRequest)
 			return
 		}
-		has := false
-		for _, l := range p.WorkflowJob.Labels {
-			if l == label {
-				has = true
-			}
-		}
-		if !has {
+		if !carriesAny(p.WorkflowJob.Labels, labels) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		handle(Event{Action: p.Action, JobID: p.WorkflowJob.ID, Repo: p.Repository.FullName, Owner: p.Repository.Owner.Login, RunnerName: p.WorkflowJob.RunnerName})
 		w.WriteHeader(http.StatusAccepted)
 	})
+}
+
+func carriesAny(jobLabels, labels []string) bool {
+	for _, j := range jobLabels {
+		for _, l := range labels {
+			if strings.EqualFold(j, l) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func verified(secret, header string, body []byte) bool {

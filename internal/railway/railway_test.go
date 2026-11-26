@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/farzai/github-runner-railway/internal/reconcile"
 )
 
 type call struct {
@@ -19,8 +21,10 @@ type call struct {
 
 func server(t *testing.T, reply func(c call) string) (*Client, *[]call, *http.Header) {
 	t.Helper()
-	return serverWith(t, Config{Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Image: "ghcr.io/acme/runner:1", Prefix: "rr-"}, reply)
+	return serverWith(t, Config{Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Prefixes: []string{"rr-", "rp-"}}, reply)
 }
+
+var pool = reconcile.Pool{Label: "railway", Image: "ghcr.io/acme/runner:1", Prefix: "rr-"}
 
 func serverWith(t *testing.T, cfg Config, reply func(c call) string) (*Client, *[]call, *http.Header) {
 	t.Helper()
@@ -62,6 +66,26 @@ func TestListReturnsOnlyOurServicesWithTheirState(t *testing.T) {
 	}
 }
 
+// One controller serves several pools in one runner project: one listing returns every pool's
+// services, each matched by the exact name rule of its own prefix.
+func TestListReturnsTheServicesOfEveryConfiguredPrefix(t *testing.T) {
+	c, calls, _ := server(t, func(call) string {
+		return `{"data":{"project":{"services":{"edges":[
+		 {"node":{"id":"1","name":"rr-abc123-0000a1","createdAt":"2026-10-17T11:00:00Z","serviceInstances":{"edges":[]}}},
+		 {"node":{"id":"2","name":"rp-abc123-0000a2","createdAt":"2026-10-17T11:01:00Z","serviceInstances":{"edges":[]}}},
+		 {"node":{"id":"3","name":"rq-abc123-0000a3","createdAt":"2026-10-17T11:01:00Z","serviceInstances":{"edges":[]}}},
+		 {"node":{"id":"4","name":"rp-postgres","createdAt":"2026-10-17T11:01:00Z","serviceInstances":{"edges":[]}}}
+		]}}}}`
+	})
+	got, err := c.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "1" || got[1].ID != "2" || got[1].ScopeHash != "abc123" || len(*calls) != 1 {
+		t.Errorf("services %+v after %d calls, want 1 and 2 from one listing", got, len(*calls))
+	}
+}
+
 func TestCreateMakesTheServiceWithItsConfigThenDeploysOnce(t *testing.T) {
 	c, calls, _ := server(t, func(c call) string {
 		switch {
@@ -71,7 +95,7 @@ func TestCreateMakesTheServiceWithItsConfigThenDeploysOnce(t *testing.T) {
 			return `{"data":{"ok":true}}`
 		}
 	})
-	id, err := c.Create(context.Background(), "rr-abc123-q", map[string]string{"ACTIONS_RUNNER_INPUT_JITCONFIG": "JIT"})
+	id, err := c.Create(context.Background(), pool, "rr-abc123-q", map[string]string{"ACTIONS_RUNNER_INPUT_JITCONFIG": "JIT"})
 	if err != nil || id != "svc-9" {
 		t.Fatalf("id %q err %v", id, err)
 	}
@@ -103,7 +127,7 @@ func TestCreateWithoutARegionLeavesPlacementToRailway(t *testing.T) {
 		}
 		return `{"data":{"ok":true}}`
 	})
-	if _, err := c.Create(context.Background(), "n", nil); err != nil {
+	if _, err := c.Create(context.Background(), pool, "n", nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg := (*calls)[1].Vars["i"].(map[string]any)
@@ -118,13 +142,15 @@ func TestCreateWithoutARegionLeavesPlacementToRailway(t *testing.T) {
 // With a region, the one replica is placed there through multiRegionConfig, the shape Railway
 // itself records on a deployment ({"<region>": {"numReplicas": 1}}).
 func TestCreatePlacesTheReplicaInTheConfiguredRegion(t *testing.T) {
-	c, calls, _ := serverWith(t, Config{Token: "t", ProjectID: "P", EnvironmentID: "E", Image: "i", Prefix: "rr-", Region: "us-east4-eqdc4a"}, func(c call) string {
+	c, calls, _ := server(t, func(c call) string {
 		if strings.Contains(c.Query, "serviceCreate") {
 			return `{"data":{"serviceCreate":{"id":"svc-9","name":"n"}}}`
 		}
 		return `{"data":{"ok":true}}`
 	})
-	if _, err := c.Create(context.Background(), "n", nil); err != nil {
+	p := pool
+	p.Region = "us-east4-eqdc4a"
+	if _, err := c.Create(context.Background(), p, "n", nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg := (*calls)[1].Vars["i"].(map[string]any)
@@ -153,7 +179,7 @@ func TestADeployAfterAFailedConfigureIsNotMadeAndTheServiceIsRemoved(t *testing.
 		}
 		return `{"data":{"serviceDelete":true}}`
 	})
-	if _, err := c.Create(context.Background(), "n", nil); err == nil {
+	if _, err := c.Create(context.Background(), pool, "n", nil); err == nil {
 		t.Fatal("want an error")
 	}
 	last := (*calls)[len(*calls)-1].Query
@@ -186,7 +212,7 @@ func TestARedirectIsNotFollowedAndTheTokenGoesNowhereElse(t *testing.T) {
 	defer other.Close()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }))
 	defer ts.Close()
-	c := New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Prefix: "rr-"})
+	c := New(Config{URL: ts.URL, Token: "tok-secret", ProjectID: "P", EnvironmentID: "E", Prefixes: []string{"rr-"}})
 	if _, err := c.List(context.Background()); err == nil || hits != 0 {
 		t.Errorf("err %v hits %d: the Project-Access-Token must not follow a redirect", err, hits)
 	}
@@ -207,7 +233,7 @@ func TestOnlyExactRunnerNamesAreListedSoSharedServicesAreNeverTouched(t *testing
 	names := []string{
 		"rr-abc123-0a1b2c", // ours
 		"rr-postgres", "rr-redis", "rr-", "rr", "RR-abc123-0a1b2c", "xrr-abc123-0a1b2c", "rrx-abc123-0a1b2c",
-		"rr-abc123-0a1b2c-extra", "rr-abc12-0a1b2c", "rr-abc123-0a1b2", "rr-ABC123-0a1b2c", "rp-abc123-0a1b2c",
+		"rr-abc123-0a1b2c-extra", "rr-abc12-0a1b2c", "rr-abc123-0a1b2", "rr-ABC123-0a1b2c", "rq-abc123-0a1b2c", "rp-postgres",
 		"postgres", "redis", "controller",
 	}
 	var edges []string

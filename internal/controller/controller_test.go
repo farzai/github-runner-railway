@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -17,7 +20,15 @@ var (
 	org  = reconcile.Scope{Kind: "org", Owner: "acme"}
 	repo = reconcile.Scope{Kind: "repo", Owner: "acme", Repo: "app"}
 	now  = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	errTest = errors.New("github 502")
 )
+
+func webhookSig(secret, body string) string {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(body))
+	return "sha256=" + hex.EncodeToString(m.Sum(nil))
+}
 
 type fakeGH struct {
 	mu      sync.Mutex
@@ -28,24 +39,51 @@ type fakeGH struct {
 	busy    map[int64]bool
 	deleted []int64
 	jit     []string
+	labels  map[string]string // runner name -> the label its JIT config registered
 	nextID  int64
 	hold    func() // when set, QueuedJobs calls it first: a test holds a cycle open with it
+
+	reads, runnerReads map[string]int // scope key -> QueuedJobs / Runners calls
 }
 
+// QueuedJobs answers the scope's jobs; a job a test wrote with no label is the default pool's
+// (railway), the label every single-pool test serves.
 func (f *fakeGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, error) {
 	if f.hold != nil {
 		f.hold()
 	}
-	return f.jobs[s.Key()], f.jobsErr[s.Key()]
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reads == nil {
+		f.reads = map[string]int{}
+	}
+	f.reads[s.Key()]++
+	jobs := append([]ghapp.Job(nil), f.jobs[s.Key()]...)
+	for i := range jobs {
+		if jobs[i].Label == "" {
+			jobs[i].Label = "railway"
+		}
+	}
+	return jobs, f.jobsErr[s.Key()]
 }
 func (f *fakeGH) Runners(_ context.Context, s reconcile.Scope) ([]reconcile.Runner, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.runnerReads == nil {
+		f.runnerReads = map[string]int{}
+	}
+	f.runnerReads[s.Key()]++
 	return f.runners[s.Key()], f.runsErr[s.Key()]
 }
-func (f *fakeGH) JITConfig(_ context.Context, s reconcile.Scope, name string) (string, int64, error) {
+func (f *fakeGH) JITConfig(_ context.Context, s reconcile.Scope, name, label string) (string, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
 	f.jit = append(f.jit, s.Key()+" "+name)
+	if f.labels == nil {
+		f.labels = map[string]string{}
+	}
+	f.labels[name] = label
 	return "JIT-" + name, 1000 + f.nextID, nil
 }
 func (f *fakeGH) DeleteRunner(_ context.Context, _ reconcile.Scope, id int64) error {
@@ -60,31 +98,38 @@ type fakeRW struct {
 	services  []reconcile.Service
 	created   []string
 	vars      map[string]map[string]string
+	images    map[string]string // service name -> image
+	regions   map[string]string // service name -> region
 	deleted   []string
 	createErr error
+	deleteErr error
 }
 
 func (f *fakeRW) List(context.Context) ([]reconcile.Service, error) { return f.services, nil }
-func (f *fakeRW) Create(_ context.Context, name string, vars map[string]string) (string, error) {
+func (f *fakeRW) Create(_ context.Context, p reconcile.Pool, name string, vars map[string]string) (string, error) {
 	if f.createErr != nil {
 		return "", f.createErr
 	}
 	f.created = append(f.created, name)
 	if f.vars == nil {
-		f.vars = map[string]map[string]string{}
+		f.vars, f.images, f.regions = map[string]map[string]string{}, map[string]string{}, map[string]string{}
 	}
-	f.vars[name] = vars
+	f.vars[name], f.images[name], f.regions[name] = vars, p.Image, p.Region
 	return "id-" + name, nil
 }
 func (f *fakeRW) Delete(_ context.Context, id string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, id)
 	return nil
 }
 
 func newC(gh *fakeGH, rw *fakeRW) *Controller {
 	c := New(Config{
-		Scopes: []reconcile.Scope{org, repo}, Prefix: "rr-", MaxRunners: 10, MaxCreatePerCycle: 5,
-		StartupGrace: 3 * time.Minute, IdleTTL: 2 * time.Minute, MaxAge: 6 * time.Hour, AlertAfter: 5 * time.Minute,
+		Pools:             []reconcile.Pool{{Label: "railway", Image: "img", Prefix: "rr-", MaxRunners: 10, Scopes: []reconcile.Scope{org, repo}}},
+		MaxCreatePerCycle: 5,
+		StartupGrace:      3 * time.Minute, IdleTTL: 2 * time.Minute, MaxAge: 6 * time.Hour, AlertAfter: 5 * time.Minute,
 	}, gh, rw)
 	c.now = func() time.Time { return now }
 	return c

@@ -26,12 +26,12 @@ func main() {
 		log.Error("startup", "err", err.Error())
 		os.Exit(1)
 	}
-	gh, err := ghapp.New(ghapp.Config{AppID: cfg.AppID, PrivateKey: cfg.PrivateKey, Label: cfg.Label, RunnerGroupID: cfg.RunnerGroupID})
+	gh, err := ghapp.New(ghapp.Config{AppID: cfg.AppID, PrivateKey: cfg.PrivateKey, Labels: cfg.Labels(), RunnerGroupID: cfg.RunnerGroupID})
 	if err != nil {
 		log.Error("startup", "err", err.Error())
 		os.Exit(1)
 	}
-	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Image: cfg.Image, Prefix: cfg.ServicePrefix, Region: cfg.Region})
+	rw := railway.New(railway.Config{Token: cfg.RailwayToken, ProjectID: cfg.RailwayProject, EnvironmentID: cfg.RailwayEnv, Prefixes: cfg.Prefixes()})
 	alert := func(msg string) {
 		log.Error("ALERT", "alert", msg) // not "msg": slog writes the message under that key
 		if cfg.AlertURL == "" {
@@ -43,13 +43,13 @@ func main() {
 		}
 	}
 	c := controller.New(controller.Config{
-		Scopes: cfg.Scopes, Prefix: cfg.ServicePrefix, MaxRunners: cfg.MaxRunners, MaxCreatePerCycle: cfg.MaxCreatePerCycle,
+		Pools: cfg.Pools, MaxCreatePerCycle: cfg.MaxCreatePerCycle,
 		StartupGrace: cfg.StartupGrace, IdleTTL: cfg.IdleTTL, MaxAge: cfg.MaxAge, AlertAfter: cfg.AlertAfter,
 		Interval: cfg.Interval, FailAlertAfter: cfg.FailAlertAfter, Alert: alert, Log: log,
 	}, gh, rw)
 
 	mux := http.NewServeMux()
-	mux.Handle("/webhook", webhook.Handler(cfg.WebhookSecret, cfg.Label, func(e webhook.Event) {
+	mux.Handle("/webhook", webhook.Handler(cfg.WebhookSecret, cfg.Labels(), func(e webhook.Event) {
 		log.Info("workflow_job", "action", e.Action, "repo", e.Repo)
 		c.OnEvent(e)
 	}))
