@@ -6,6 +6,7 @@ the major version is 0, a minor release may change configuration (each such chan
 ## [Unreleased]
 
 ### Added
+- `RUNNER_POOLS`: one controller serves several runner images. It takes a JSON list of pools, each with a `label`, `image`, `prefix`, `max_runners`, `scopes` and an optional `region` (falling back to `RUNNER_REGION`). Each cycle reads every scope once, whichever pools list it, gives each queued job to the pool whose label it asks for, and plans each pool on its own, so a full pool never holds up another. The App's one webhook wakes the controller for a job of any pool, so a second image no longer needs a second controller that only polls and scans the same repositories again. Labels and prefixes must differ across pools. The single-pool variables (`RUNNER_IMAGE`, `RUNNER_SCOPES`, `RUNNER_LABEL`, `RUNNER_SERVICE_PREFIX`, `MAX_RUNNERS`) still configure one pool unchanged; setting them together with `RUNNER_POOLS` is refused. `MAX_CREATE_PER_CYCLE` applies per pool. docs/deploy.md describes moving from two controllers to one; the second-controller setup is no longer documented.
 - The `sqlite3` command-line shell in every image variant, for tests and scripts that drive a SQLite database from the shell.
 - `libssl-dev` in every image variant, so Rust crates that link OpenSSL (`openssl-sys`) build on the pool; the build checks that `pkg-config` finds it.
 - The GitHub CLI (`gh` 2.102.0, pinned by version and sha256) in every image variant, so a job can open or comment on issues without a GitHub-hosted runner. Nothing is logged in: a job passes `GH_TOKEN`.
@@ -17,6 +18,8 @@ the major version is 0, a minor release may change configuration (each such chan
 - Jobs queued in a run that GitHub reports as `pending` (for example while it waits on a concurrency group) are served; the controller listed only `queued` and `in_progress` runs and left such jobs waiting forever.
 
 ### Changed
+- The webhook matches a job's labels without case, as GitHub and the job scan already do; a label written `Railway` in `runs-on` now wakes the controller too.
+- A label of `self-hosted`, `linux` or `x64` is refused at start: every runner has those, so they cannot pick out a pool.
 - A queued-job webhook starts a cycle after a 3 s debounce instead of a fixed 20 s; cycles still start at least 20 s apart (measured from the previous cycle's start).
 
 - CI rebuilds the runner images only when `image/` changes and the controller image only when its Go code or Dockerfile changes, with a per-target layer cache; a version tag still publishes all three.

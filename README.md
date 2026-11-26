@@ -134,13 +134,15 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | --- | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | the App (the PEM may keep `\n` escaped) | required |
 | `RUNNER_RAILWAY_TOKEN`, `RUNNER_RAILWAY_PROJECT_ID`, `RUNNER_RAILWAY_ENVIRONMENT_ID` | a project token, project and environment of the **runner** project (not `RAILWAY_*`: Railway injects those for the controller's own project, and the controller refuses to manage the project it runs in) | required |
-| `RUNNER_IMAGE` | the runner image, pinned to a version or digest | required |
-| `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners | required |
-| `RUNNER_LABEL` | the `runs-on` label of this controller's runners | `railway` |
-| `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of this controller's runners; a second controller in the same runner project needs its own (a letter, a letter or digit, a dash, e.g. `rp-`) | `rr-` |
-| `RUNNER_REGION` | Railway region id for this controller's runners, e.g. `us-east4-eqdc4a`; the API's `regions` query lists them. Unset leaves placement to Railway (the workspace's preferred region) | unset |
+| `RUNNER_POOLS` | several runner images on one controller: a JSON list of pools, see [Several pools](#several-pools). Set it instead of the five single-pool variables below | unset |
+| `RUNNER_IMAGE` | the runner image, pinned to a version or digest (single pool) | required without `RUNNER_POOLS` |
+| `RUNNER_SCOPES` | comma list of `org:<name>` and `repo:<owner>/<name>` that may get runners (single pool) | required without `RUNNER_POOLS` |
+| `RUNNER_LABEL` | the `runs-on` label of the runners (single pool) | `railway` |
+| `RUNNER_SERVICE_PREFIX` | Railway service-name prefix of the runners: a letter, a letter or digit, a dash, e.g. `rp-` (single pool) | `rr-` |
+| `MAX_RUNNERS` | services at a time (single pool) | `8` |
+| `RUNNER_REGION` | Railway region id for the runners, e.g. `us-east4-eqdc4a`, for every pool without a `region` of its own; the API's `regions` query lists them. Unset leaves placement to Railway (the workspace's preferred region) | unset |
 | `RUNNER_GROUP_ID` | the dedicated runner group of org runners; required for an `org:` scope, and the Default group (1) is refused | none |
-| `MAX_RUNNERS` / `MAX_CREATE_PER_CYCLE` | services in all / created in one cycle | `8` / `4` |
+| `MAX_CREATE_PER_CYCLE` | services one pool creates in one cycle | `4` |
 | `POLL_SECONDS` | polling period (a queued-job webhook wakes a cycle sooner: after a 3 s debounce, and at least 20 s after the previous cycle started) | `120` |
 | `STARTUP_GRACE_SECONDS` | how long a registered runner may stay offline before its service is removed | `300` |
 | `IDLE_TTL_SECONDS` | how long a surplus idle runner is kept | `120` |
@@ -148,6 +150,33 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `ALERT_QUEUED_MINUTES` / `ALERT_WEBHOOK_URL` | log an alert (and POST `{"text": ...}` to the URL) when a job waits this long with no runner coming | `5` / none |
 | `ALERT_FAILED_CYCLES` | after this many failed cycles in a row: one alert (naming scopes unreadable that long), `/healthz` 503, and one "recovered" alert when a cycle succeeds again. A scope GitHub answers 404 for this many cycles in a row raises one alert of its own | `3` |
 | `PORT` | HTTP port | `8080` |
+
+### Several pools
+
+One controller can serve several runner images, each a pool with its own label, image, service-name
+prefix, maximum and scopes. Each cycle reads every scope once, whichever pools list it, and gives each
+queued job to the pool whose label it asks for. Each pool is then planned on its own, so a pool at its
+maximum never holds up another. The App's one webhook wakes the controller for a job of any pool.
+
+```
+RUNNER_POOLS=[
+  {"label":"railway","image":"ghcr.io/farzai/github-runner-railway:<version>","prefix":"rr-","max_runners":4,"scopes":["repo:acme/app","repo:acme/api"]},
+  {"label":"railway-pg","image":"ghcr.io/farzai/github-runner-railway:pg-<version>","prefix":"rp-","max_runners":2,"scopes":["repo:acme/app"]}
+]
+```
+
+* Every field is required except `region`, which falls back to `RUNNER_REGION`. An unknown field is
+  refused, so a typo stops the controller at start.
+* Labels must differ (compared without case, as GitHub does) and cannot be `self-hosted`, `linux` or
+  `x64`. A job that asks for two pool labels fits no runner and is left alone.
+* Prefixes must differ. The prefix rule (a letter, a letter or digit, a dash) means one prefix is never
+  the start of another, so no pool lists or removes another pool's services.
+* `RUNNER_POOLS` together with `RUNNER_IMAGE`, `RUNNER_LABEL`, `RUNNER_SERVICE_PREFIX`, `MAX_RUNNERS` or
+  `RUNNER_SCOPES` is refused. Without `RUNNER_POOLS`, those five variables are one pool, as before.
+* `MAX_CREATE_PER_CYCLE` applies to each pool, so N pools can create up to N times that many services in
+  one cycle.
+* Before you take a pool out, drain it: move its workflows to another label and wait until its services
+  are gone. The controller no longer lists the services of a prefix it does not have.
 
 ## The runner images
 
@@ -159,10 +188,8 @@ limits. [docs/deploy.md](docs/deploy.md) has the full guide, rollout and rollbac
 | `ghcr.io/farzai/github-runner-railway:php-<version>` | the base image plus PHP 8.3, 8.4 and 8.5 (ondrej/php PPA) and Composer, and `use-php <version>` to pick one; for PHP projects, since `setup-php` cannot run without sudo |
 | `ghcr.io/farzai/github-runner-railway:redis-<version>` | the base image plus a pinned `redis-server` and `ci-redis` |
 
-To serve both, run a **second controller** with `RUNNER_LABEL=railway-pg`, `RUNNER_SERVICE_PREFIX=rp-`
-and the `pg-` image, in the same runner project. Each controller lists and removes only its own
-services and only takes jobs that ask for its label. A GitHub App has one webhook URL, so the second
-controller works on polling alone (set `POLL_SECONDS=60`).
+To serve more than one image, give each its own pool in `RUNNER_POOLS` (see [Several pools](#several-pools)):
+one controller, one webhook, each pool with its own label and prefix.
 
 The published `pg-` image has PostgreSQL 18 and no extensions. Build your own with another major and
 PGDG extensions (all pinned, from the signed PGDG repository) and push it to your registry:
@@ -244,8 +271,8 @@ For workflows you cannot change yet (`sudo apt-get install`, `playwright install
 `ldconfig` in a step), the `sudo-<version>` image gives the runner user passwordless sudo. Each job
 is its own container, so root stays inside that job's container and is gone when it ends, but the
 job can now change anything in it, and the container still shares the runner project's private
-network with concurrent jobs. Use it for private repositories only, in its own pool (a controller
-with its own label and `RUNNER_SERVICE_PREFIX`), and prefer a derived image where you can. The
+network with concurrent jobs. Use it for private repositories only, in its own pool (its own label and
+prefix in `RUNNER_POOLS`), and prefer a derived image where you can. The
 default images stay sudo-free.
 
 ## Limits
@@ -261,7 +288,7 @@ default images stay sudo-free.
   about 1,000 processes and threads). `nproc` shows the host's cores, not the quota; Node's
   `os.availableParallelism()` reads the quota. Pass explicit `-j`/worker counts to be safe.
 * **Railway API:** 1,000 requests an hour per token. A job costs about four calls and a cycle one, so
-  roughly 230 jobs an hour at the default poll; two controllers sharing one token share that budget.
+  roughly 230 jobs an hour at the default poll; every pool, and every controller sharing the token, shares that budget.
 * **GitHub API:** 5,000 requests an hour per installation, shared by every scope of that installation
   (one access token per installation). Run and job lists are read with `If-None-Match`, and an
   unchanged list (`304`) does not count against the limit. Prefer `repo:` scopes for large organizations:
