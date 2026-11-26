@@ -233,7 +233,7 @@ func TestOnlyExactRunnerNamesAreListedSoSharedServicesAreNeverTouched(t *testing
 	names := []string{
 		"rr-abc123-0a1b2c", // ours
 		"rr-postgres", "rr-redis", "rr-", "rr", "RR-abc123-0a1b2c", "xrr-abc123-0a1b2c", "rrx-abc123-0a1b2c",
-		"rr-abc123-0a1b2c-extra", "rr-abc12-0a1b2c", "rr-abc123-0a1b2", "rr-ABC123-0a1b2c", "rp-abc123-0a1b2c",
+		"rr-abc123-0a1b2c-extra", "rr-abc12-0a1b2c", "rr-abc123-0a1b2", "rr-ABC123-0a1b2c", "rq-abc123-0a1b2c", "rp-postgres",
 		"postgres", "redis", "controller",
 	}
 	var edges []string

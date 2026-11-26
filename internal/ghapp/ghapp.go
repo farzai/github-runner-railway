@@ -38,12 +38,12 @@ var ErrBusy = errors.New("ghapp: runner is busy")
 // (deleted, renamed, or the App no longer holds it).
 var ErrNotFound = errors.New("ghapp: not found")
 
-// Config is the App and the label this fleet serves.
+// Config is the App and the labels this fleet serves, one per pool.
 type Config struct {
 	AppID         string
 	PrivateKey    string // PEM; a Railway variable may hold it with the newlines escaped
 	BaseURL       string // default https://api.github.com
-	Label         string
+	Labels        []string
 	RunnerGroupID int // the org runner group the runners join (repo scope always uses the default group, 1)
 	HTTP          *http.Client
 }
@@ -81,6 +81,9 @@ type token struct {
 func New(cfg Config) (*Client, error) {
 	if cfg.AppID == "" {
 		return nil, errors.New("ghapp: no app id")
+	}
+	if len(cfg.Labels) == 0 {
+		return nil, errors.New("ghapp: no runner label")
 	}
 	pemText := strings.ReplaceAll(strings.TrimSpace(cfg.PrivateKey), `\n`, "\n")
 	block, _ := pem.Decode([]byte(pemText))
@@ -344,9 +347,9 @@ func (c *Client) each(ctx context.Context, first, bearer string, page func() any
 	return nil
 }
 
-// JITConfig registers a one-job runner called name in the scope and returns its encoded
-// JIT config and the runner's id.
-func (c *Client) JITConfig(ctx context.Context, s reconcile.Scope, name string) (string, int64, error) {
+// JITConfig registers a one-job runner called name, with its pool's label, in the scope and
+// returns its encoded JIT config and the runner's id.
+func (c *Client) JITConfig(ctx context.Context, s reconcile.Scope, name, label string) (string, int64, error) {
 	tok, err := c.installToken(ctx, s)
 	if err != nil {
 		return "", 0, err
@@ -355,7 +358,7 @@ func (c *Client) JITConfig(ctx context.Context, s reconcile.Scope, name string) 
 	if s.Kind == "org" && c.cfg.RunnerGroupID > 0 {
 		group = c.cfg.RunnerGroupID
 	}
-	body := map[string]any{"name": name, "runner_group_id": group, "labels": []string{"self-hosted", "linux", "x64", c.cfg.Label}, "work_folder": "_work"}
+	body := map[string]any{"name": name, "runner_group_id": group, "labels": []string{"self-hosted", "linux", "x64", label}, "work_folder": "_work"}
 	var out struct {
 		Runner struct {
 			ID int64 `json:"id"`
@@ -414,6 +417,7 @@ func (c *Client) DeleteRunner(ctx context.Context, s reconcile.Scope, id int64) 
 type Job struct {
 	ID        int64
 	Repo      string
+	Label     string // the pool label it asks for, spelled as configured
 	CreatedAt time.Time
 	Unlisted  bool // found only through the unfiltered runs list: GitHub's status filter left its run out
 }
@@ -599,31 +603,48 @@ func (c *Client) runJobs(ctx context.Context, repo string, run int64, tok string
 	err := c.each(ctx, fmt.Sprintf("%s/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", c.cfg.BaseURL, repo, run), tok,
 		func() any { jobs.Jobs = nil; return &jobs }, func() {
 			for _, j := range jobs.Jobs {
-				if j.Status != "queued" || seen[j.ID] || !c.canTake(j.Labels) {
+				label, ok := c.canTake(j.Labels)
+				if j.Status != "queued" || seen[j.ID] || !ok {
 					continue
 				}
 				seen[j.ID] = true
-				out = append(out, Job{ID: j.ID, Repo: repo, CreatedAt: j.CreatedAt})
+				out = append(out, Job{ID: j.ID, Repo: repo, Label: label, CreatedAt: j.CreatedAt})
 			}
 		})
 	return out, err
 }
 
-// canTake: a runner of ours has self-hosted, linux, x64 (GitHub adds the last two) and our
-// label, so it can take a job only if every label the job asks for is one of those and ours is
-// among them. Labels compare without case.
-func (c *Client) canTake(jobLabels []string) bool {
-	ours := false
+// canTake answers which pool's runner can take a job. A runner of ours has self-hosted, linux,
+// x64 (GitHub adds the last two) and its pool's label, so it can take a job only if every label
+// the job asks for is one of those and its pool's label is among them; a job that asks for two
+// pool labels fits no runner. Labels compare without case; the answer is the configured spelling.
+func (c *Client) canTake(jobLabels []string) (string, bool) {
+	label := ""
 	for _, l := range jobLabels {
-		switch strings.ToLower(l) {
-		case strings.ToLower(c.cfg.Label):
-			ours = true
-		case "self-hosted", "linux", "x64":
+		switch {
+		case baseLabels[strings.ToLower(l)] || strings.EqualFold(l, label):
+		case label == "":
+			if label = c.poolLabel(l); label == "" {
+				return "", false
+			}
 		default:
-			return false
+			return "", false
 		}
 	}
-	return ours
+	return label, label != ""
+}
+
+// baseLabels is the labels every runner of ours has, whatever its pool.
+var baseLabels = map[string]bool{"self-hosted": true, "linux": true, "x64": true}
+
+// poolLabel is the configured label l names, or "" when it names none.
+func (c *Client) poolLabel(l string) string {
+	for _, p := range c.cfg.Labels {
+		if strings.EqualFold(l, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // RateLimit is what GitHub last reported for one installation.

@@ -32,6 +32,18 @@ func (s Scope) Hash() string {
 	return hex.EncodeToString(h[:])[:6]
 }
 
+// Pool is one kind of runner the controller keeps: the jobs that ask for Label run on services
+// made from Image, named with Prefix, at most MaxRunners at a time, registered in Scopes. Make plans
+// one pool at a time.
+type Pool struct {
+	Label      string
+	Image      string
+	Prefix     string // e.g. "rr-"; no two pools share one, and none starts another
+	Region     string // Railway region of its runners; empty leaves it to Railway
+	MaxRunners int
+	Scopes     []Scope
+}
+
 // Service is one runner service on Railway.
 type Service struct {
 	ID        string
