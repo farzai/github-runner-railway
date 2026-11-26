@@ -32,7 +32,7 @@ const queued = `{"action":"queued","workflow_job":{"id":7,"labels":["self-hosted
 
 func TestAValidQueuedJobWithOurLabelNudgesTheController(t *testing.T) {
 	var got []Event
-	h := Handler("s3cret", "railway", func(e Event) { got = append(got, e) })
+	h := Handler("s3cret", []string{"railway"}, func(e Event) { got = append(got, e) })
 	if w := post(h, "s3cret", "workflow_job", queued, nil); w.Code != http.StatusAccepted {
 		t.Fatalf("status %d", w.Code)
 	}
@@ -43,7 +43,7 @@ func TestAValidQueuedJobWithOurLabelNudgesTheController(t *testing.T) {
 
 func TestABadOrMissingSignatureIsRefusedAndNothingIsHandled(t *testing.T) {
 	called := false
-	h := Handler("s3cret", "railway", func(Event) { called = true })
+	h := Handler("s3cret", []string{"railway"}, func(Event) { called = true })
 	if w := post(h, "wrong", "workflow_job", queued, nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("wrong secret: status %d", w.Code)
 	}
@@ -59,14 +59,14 @@ func TestABadOrMissingSignatureIsRefusedAndNothingIsHandled(t *testing.T) {
 }
 
 func TestAnEmptySecretRefusesEverything(t *testing.T) {
-	h := Handler("", "railway", func(Event) { t.Error("handled") })
+	h := Handler("", []string{"railway"}, func(Event) { t.Error("handled") })
 	if w := post(h, "", "workflow_job", queued, nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("status %d: with no secret configured nothing can be verified", w.Code)
 	}
 }
 
 func TestOtherEventsAndOtherLabelsAreAcknowledgedAndIgnored(t *testing.T) {
-	h := Handler("s", "railway", func(Event) { t.Error("handled") })
+	h := Handler("s", []string{"railway"}, func(Event) { t.Error("handled") })
 	if w := post(h, "s", "ping", `{}`, nil); w.Code != http.StatusOK {
 		t.Errorf("ping: %d", w.Code)
 	}
@@ -77,9 +77,22 @@ func TestOtherEventsAndOtherLabelsAreAcknowledgedAndIgnored(t *testing.T) {
 }
 
 func TestAHugeBodyIsRefused(t *testing.T) {
-	h := Handler("s", "railway", func(Event) {})
+	h := Handler("s", []string{"railway"}, func(Event) {})
 	big := strings.Repeat("a", 2<<20)
 	if w := post(h, "s", "workflow_job", big, nil); w.Code != http.StatusRequestEntityTooLarge && w.Code != http.StatusUnauthorized {
 		t.Errorf("status %d", w.Code)
+	}
+}
+
+// One App has one webhook URL, so the one controller hears every pool's jobs: an event carrying any
+// pool label nudges it, compared without case as GitHub compares runner labels.
+func TestAQueuedJobWithAnyPoolLabelNudgesTheController(t *testing.T) {
+	for _, l := range []string{"railway", "railway-pg", "Railway-PG"} {
+		n := 0
+		h := Handler("s", []string{"railway", "railway-pg"}, func(Event) { n++ })
+		body := strings.Replace(queued, `"railway"`, `"`+l+`"`, 1)
+		if w := post(h, "s", "workflow_job", body, nil); w.Code != http.StatusAccepted || n != 1 {
+			t.Errorf("label %s: status %d, handled %d times", l, w.Code, n)
+		}
 	}
 }

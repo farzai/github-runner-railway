@@ -22,10 +22,10 @@ func TestLoadParsesScopesAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Scopes) != 2 || c.Scopes[0].Key() != "org:acme" || c.Scopes[1].Key() != "repo:acme/app" {
-		t.Errorf("scopes %+v", c.Scopes)
+	if len(c.Pools) != 1 || len(c.Pools[0].Scopes) != 2 || c.Pools[0].Scopes[0].Key() != "org:acme" || c.Pools[0].Scopes[1].Key() != "repo:acme/app" {
+		t.Errorf("pools %+v", c.Pools)
 	}
-	if c.Label != "railway" || c.MaxRunners != 8 || c.Interval != 2*time.Minute || c.MaxAge != 6*time.Hour+10*time.Minute || c.Port != "8080" {
+	if c.Pools[0].Label != "railway" || c.Pools[0].MaxRunners != 8 || c.Interval != 2*time.Minute || c.MaxAge != 6*time.Hour+10*time.Minute || c.Port != "8080" {
 		t.Errorf("defaults %+v", c)
 	}
 }
@@ -125,13 +125,13 @@ func TestTheControllerRefusesToManageTheProjectItRunsIn(t *testing.T) {
 // it is a safe Railway service name and one prefix can never start another ("rr-" vs "rr-pg-").
 func TestTheServicePrefixDefaultsToRrAndIsValidated(t *testing.T) {
 	c, err := Load(env(base()))
-	if err != nil || c.ServicePrefix != "rr-" {
-		t.Fatalf("default prefix %q err %v, want rr-", c.ServicePrefix, err)
+	if err != nil || c.Pools[0].Prefix != "rr-" {
+		t.Fatalf("default prefix %q err %v, want rr-", c.Pools[0].Prefix, err)
 	}
 	m := base()
 	m["RUNNER_SERVICE_PREFIX"] = "rp-"
-	if c, err := Load(env(m)); err != nil || c.ServicePrefix != "rp-" {
-		t.Fatalf("prefix %q err %v, want rp-", c.ServicePrefix, err)
+	if c, err := Load(env(m)); err != nil || c.Pools[0].Prefix != "rp-" {
+		t.Fatalf("prefix %q err %v, want rp-", c.Pools[0].Prefix, err)
 	}
 	for _, bad := range []string{"rp", "RP-", "rr-pg-", "r-p-", "toolong-", "-", "r p-"} {
 		m["RUNNER_SERVICE_PREFIX"] = bad
@@ -145,13 +145,13 @@ func TestTheServicePrefixDefaultsToRrAndIsValidated(t *testing.T) {
 // placement (the workspace's preferred region), so an existing controller is unchanged.
 func TestTheRunnerRegionIsOptionalAndValidated(t *testing.T) {
 	c, err := Load(env(base()))
-	if err != nil || c.Region != "" {
-		t.Fatalf("default region %q err %v, want empty", c.Region, err)
+	if err != nil || c.Pools[0].Region != "" {
+		t.Fatalf("default region %q err %v, want empty", c.Pools[0].Region, err)
 	}
 	m := base()
 	m["RUNNER_REGION"] = " us-east4-eqdc4a "
-	if c, err := Load(env(m)); err != nil || c.Region != "us-east4-eqdc4a" {
-		t.Fatalf("region %q err %v, want us-east4-eqdc4a", c.Region, err)
+	if c, err := Load(env(m)); err != nil || c.Pools[0].Region != "us-east4-eqdc4a" {
+		t.Fatalf("region %q err %v, want us-east4-eqdc4a", c.Pools[0].Region, err)
 	}
 	if !strings.Contains(c.String(), "region=") {
 		t.Errorf("String() %q should name the region so a startup log shows where runners go", c.String())

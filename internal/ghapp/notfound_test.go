@@ -34,7 +34,7 @@ func TestARepoWhoseInstallationLookupAnswers404IsErrNotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(ts.Close)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway"})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Labels: []string{"railway", "railway-pg"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestAnOrgWhoseInstallationLookupAnswers404IsErrNotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(ts.Close)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway"})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Labels: []string{"railway", "railway-pg"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestAnInstallationWhoseTokenRequestAnswers404IsErrNotFoundAndForgotten(t *t
 		}
 	}))
 	t.Cleanup(ts.Close)
-	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Label: "railway"})
+	c, err := New(Config{AppID: "123", PrivateKey: pemKey, BaseURL: ts.URL, Labels: []string{"railway", "railway-pg"}})
 	if err != nil {
 		t.Fatal(err)
 	}
