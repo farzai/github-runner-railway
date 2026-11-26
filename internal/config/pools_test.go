@@ -160,8 +160,8 @@ func TestCreatesPerCycleAndThePollPeriodHaveAFloor(t *testing.T) {
 // Each lower bound is exact: the bound itself is accepted, one below it refused.
 func TestEachNumberIsAcceptedFromItsLowerBound(t *testing.T) {
 	m := base()
-	m["ALERT_FAILED_CYCLES"], m["STARTUP_GRACE_SECONDS"], m["MAX_RUNNERS"] = "1", "0", "1"
-	if c, err := Load(env(m)); err != nil || c.FailAlertAfter != 1 || c.StartupGrace != 0 || c.Pools[0].MaxRunners != 1 {
+	m["ALERT_FAILED_CYCLES"], m["STARTUP_GRACE_SECONDS"], m["MAX_RUNNERS"], m["MAX_CREATE_PER_CYCLE"] = "1", "0", "1", "1"
+	if c, err := Load(env(m)); err != nil || c.FailAlertAfter != 1 || c.StartupGrace != 0 || c.Pools[0].MaxRunners != 1 || c.MaxCreatePerCycle != 1 {
 		t.Errorf("err %v config %+v", err, c)
 	}
 	for _, v := range []string{"-1", "abc", "1.5"} {
