@@ -77,7 +77,7 @@ type laggingGH struct {
 
 func (g *laggingGH) QueuedJobs(_ context.Context, s reconcile.Scope) ([]ghapp.Job, error) {
 	if g.reads.Add(1) >= g.listFrom {
-		return []ghapp.Job{{ID: 1, Repo: "acme/app", CreatedAt: now}}, nil
+		return []ghapp.Job{{ID: 1, Repo: "acme/app", Label: "railway", CreatedAt: now}}, nil
 	}
 	return nil, nil
 }

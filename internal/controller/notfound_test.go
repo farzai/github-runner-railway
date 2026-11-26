@@ -185,11 +185,11 @@ func TestAMissingScopeIsAlertedOnceAndClearedWhenItReadsAgain(t *testing.T) {
 func TestASingleScopePoolThatIsNotFoundFailsAndAnEmptyPoolDoesNot(t *testing.T) {
 	gh := &fakeGH{jobsErr: map[string]error{repo.Key(): notFound("acme/app")}}
 	c, _ := alerting(gh, &fakeRW{})
-	c.cfg.Scopes = []reconcile.Scope{repo}
+	c.scopes = []reconcile.Scope{repo}
 	if err := c.Cycle(context.Background()); err == nil || !strings.Contains(err.Error(), repo.Key()) {
 		t.Fatalf("cycle: %v, want a failure naming %s", err, repo.Key())
 	}
-	c.cfg.Scopes = nil
+	c.scopes = nil
 	if err := c.Cycle(context.Background()); err != nil {
 		t.Fatalf("cycle with no scopes: %v, want success", err)
 	}
