@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,6 +220,37 @@ func TestAQueuedWebhookForEitherPoolsLabelStartsACycle(t *testing.T) {
 		case <-c.wake:
 		default:
 			t.Errorf("label %s: a queued job did not wake the loop", label)
+		}
+	}
+}
+
+func TestAFailedReapFailsTheCycleAndIsNotCounted(t *testing.T) {
+	gone := reconcile.Service{ID: "p1", Name: "rp-" + repo.Hash() + "-aaaaaa", ScopeHash: repo.Hash(), CreatedAt: now.Add(-10 * time.Minute), Exited: true}
+	rw := &fakeRW{services: []reconcile.Service{gone}, deleteErr: errTest}
+	c := newPooled(&fakeGH{}, rw, basePool(), pgPool())
+	if err := c.Cycle(context.Background()); err == nil {
+		t.Fatal("a reap Railway refused must fail the cycle")
+	}
+	if st := c.Status(); st.Services != 0 || st.LastError == "" {
+		t.Errorf("status %+v", st)
+	}
+}
+
+func TestTheCycleLineCountsWhatEveryPoolCreatedAndReaped(t *testing.T) {
+	gh := &fakeGH{jobs: map[string][]ghapp.Job{repo.Key(): {job(1, "railway", now), job(2, "railway-pg", now)}}}
+	rw := &fakeRW{services: []reconcile.Service{
+		{ID: "r1", Name: "rr-" + repo.Hash() + "-aaaaaa", ScopeHash: repo.Hash(), CreatedAt: now.Add(-time.Hour), Exited: true},
+		{ID: "p1", Name: "rp-" + repo.Hash() + "-aaaaaa", ScopeHash: repo.Hash(), CreatedAt: now.Add(-time.Hour), Exited: true},
+	}}
+	var buf bytes.Buffer
+	c := newPooled(gh, rw, basePool(), pgPool())
+	c.cfg.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	if err := c.Cycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"created=2", "reaped=2", "pool=railway-pg"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log %q lacks %s", buf.String(), want)
 		}
 	}
 }

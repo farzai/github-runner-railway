@@ -102,6 +102,7 @@ type fakeRW struct {
 	regions   map[string]string // service name -> region
 	deleted   []string
 	createErr error
+	deleteErr error
 }
 
 func (f *fakeRW) List(context.Context) ([]reconcile.Service, error) { return f.services, nil }
@@ -117,6 +118,9 @@ func (f *fakeRW) Create(_ context.Context, p reconcile.Pool, name string, vars m
 	return "id-" + name, nil
 }
 func (f *fakeRW) Delete(_ context.Context, id string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, id)
 	return nil
 }

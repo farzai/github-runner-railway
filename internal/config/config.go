@@ -42,19 +42,15 @@ func (c Config) String() string {
 }
 
 // Labels is every pool's label, in pool order.
-func (c Config) Labels() []string {
-	out := make([]string, len(c.Pools))
-	for i, p := range c.Pools {
-		out[i] = p.Label
-	}
-	return out
-}
+func (c Config) Labels() []string { return c.each(func(p reconcile.Pool) string { return p.Label }) }
 
 // Prefixes is every pool's service-name prefix, in pool order.
-func (c Config) Prefixes() []string {
+func (c Config) Prefixes() []string { return c.each(func(p reconcile.Pool) string { return p.Prefix }) }
+
+func (c Config) each(field func(reconcile.Pool) string) []string {
 	out := make([]string, len(c.Pools))
 	for i, p := range c.Pools {
-		out[i] = p.Prefix
+		out[i] = field(p)
 	}
 	return out
 }
@@ -231,32 +227,38 @@ func parsePools(raw, region string) ([]reconcile.Pool, error) {
 	pools := make([]reconcile.Pool, 0, len(in))
 	for i, pj := range in {
 		names := pooledNames(i)
-		p := reconcile.Pool{Label: strings.TrimSpace(pj.Label), Image: strings.TrimSpace(pj.Image), Prefix: strings.TrimSpace(pj.Prefix),
-			Region: strings.TrimSpace(pj.Region), MaxRunners: pj.MaxRunners}
-		if p.Region == "" {
-			p.Region = region
+		p, err := pj.pool(region, names)
+		if err == nil {
+			err = checkApart(p, pools, names)
 		}
-		for _, f := range []struct{ v, name string }{{p.Label, names.label}, {p.Image, names.image}, {p.Prefix, names.prefix}} {
-			if f.v == "" {
-				return nil, fmt.Errorf("config: %s is not set", f.name)
-			}
-		}
-		if len(pj.Scopes) == 0 {
-			return nil, fmt.Errorf("config: %s is empty", names.scopes)
-		}
-		var err error
-		if p.Scopes, err = parseScopes(pj.Scopes, names.scopes); err != nil {
-			return nil, err
-		}
-		if err := checkPool(p, names); err != nil {
-			return nil, err
-		}
-		if err := checkApart(p, pools, names); err != nil {
+		if err != nil {
 			return nil, err
 		}
 		pools = append(pools, p)
 	}
 	return pools, nil
+}
+
+// pool is the entry as a checked pool; with no region of its own it takes region.
+func (pj poolJSON) pool(region string, names poolNames) (reconcile.Pool, error) {
+	p := reconcile.Pool{Label: strings.TrimSpace(pj.Label), Image: strings.TrimSpace(pj.Image), Prefix: strings.TrimSpace(pj.Prefix),
+		Region: strings.TrimSpace(pj.Region), MaxRunners: pj.MaxRunners}
+	if p.Region == "" {
+		p.Region = region
+	}
+	for _, f := range []struct{ v, name string }{{p.Label, names.label}, {p.Image, names.image}, {p.Prefix, names.prefix}} {
+		if f.v == "" {
+			return p, fmt.Errorf("config: %s is not set", f.name)
+		}
+	}
+	if len(pj.Scopes) == 0 {
+		return p, fmt.Errorf("config: %s is empty", names.scopes)
+	}
+	var err error
+	if p.Scopes, err = parseScopes(pj.Scopes, names.scopes); err != nil {
+		return p, err
+	}
+	return p, checkPool(p, names)
 }
 
 // checkPool checks what a pool must be on its own.

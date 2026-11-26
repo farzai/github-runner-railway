@@ -141,3 +141,38 @@ func TestWithoutRunnerPoolsTheImageAndScopesAreStillRequired(t *testing.T) {
 		}
 	}
 }
+
+func TestCreatesPerCycleAndThePollPeriodHaveAFloor(t *testing.T) {
+	for k, v := range map[string]string{"MAX_CREATE_PER_CYCLE": "0", "POLL_SECONDS": "9"} {
+		m := base()
+		m[k] = v
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), k) {
+			t.Errorf("%s=%s: err %v", k, v, err)
+		}
+	}
+	m := base()
+	m["POLL_SECONDS"] = "10"
+	if _, err := Load(env(m)); err != nil {
+		t.Errorf("POLL_SECONDS=10: %v", err)
+	}
+}
+
+// Each lower bound is exact: the bound itself is accepted, one below it refused.
+func TestEachNumberIsAcceptedFromItsLowerBound(t *testing.T) {
+	m := base()
+	m["ALERT_FAILED_CYCLES"], m["STARTUP_GRACE_SECONDS"], m["MAX_RUNNERS"] = "1", "0", "1"
+	if c, err := Load(env(m)); err != nil || c.FailAlertAfter != 1 || c.StartupGrace != 0 || c.Pools[0].MaxRunners != 1 {
+		t.Errorf("err %v config %+v", err, c)
+	}
+	for _, v := range []string{"-1", "abc", "1.5"} {
+		m := base()
+		m["STARTUP_GRACE_SECONDS"] = v
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "STARTUP_GRACE_SECONDS") {
+			t.Errorf("STARTUP_GRACE_SECONDS=%s: err %v", v, err)
+		}
+	}
+	one := `[{"label":"railway","image":"i","prefix":"rr-","max_runners":1,"scopes":["repo:acme/app"]}]`
+	if c, err := Load(env(pooled(one))); err != nil || c.Pools[0].MaxRunners != 1 {
+		t.Errorf("max_runners 1: err %v", err)
+	}
+}
